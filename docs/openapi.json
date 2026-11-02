@@ -1,0 +1,591 @@
+{
+  "components": {
+    "schemas": {
+      "AcaoSugerida": {
+        "enum": [
+          "REENVIAR_IMAGEM",
+          "CORRIGIR_REQUISICAO",
+          "TENTAR_NOVAMENTE"
+        ],
+        "title": "AcaoSugerida",
+        "type": "string"
+      },
+      "Campo": {
+        "properties": {
+          "motivos": {
+            "items": {
+              "$ref": "#/components/schemas/MotivoCampo"
+            },
+            "title": "Motivos",
+            "type": "array"
+          },
+          "status_leitura": {
+            "$ref": "#/components/schemas/StatusLeitura"
+          },
+          "status_validacao": {
+            "$ref": "#/components/schemas/StatusValidacao"
+          },
+          "valor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Transcrição literal; null quando ilegível ou ausente.",
+            "title": "Valor"
+          },
+          "valor_normalizado": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Valor normalizado pelo código; null quando não há leitura limpa.",
+            "title": "Valor Normalizado"
+          }
+        },
+        "required": [
+          "valor",
+          "valor_normalizado",
+          "status_leitura",
+          "status_validacao"
+        ],
+        "title": "Campo",
+        "type": "object"
+      },
+      "CodigoErro": {
+        "enum": [
+          "REQUISICAO_INVALIDA",
+          "ARQUIVO_GRANDE_DEMAIS",
+          "DOCUMENTO_NAO_PROCESSAVEL",
+          "PROVIDER_INDISPONIVEL",
+          "TEMPO_ESGOTADO",
+          "ERRO_INTERNO"
+        ],
+        "title": "CodigoErro",
+        "type": "string"
+      },
+      "Documento": {
+        "properties": {
+          "lado": {
+            "$ref": "#/components/schemas/Lado"
+          },
+          "subtipo": {
+            "$ref": "#/components/schemas/Subtipo"
+          },
+          "uf": {
+            "$ref": "#/components/schemas/UF"
+          }
+        },
+        "required": [
+          "subtipo",
+          "uf",
+          "lado"
+        ],
+        "title": "Documento",
+        "type": "object"
+      },
+      "Lado": {
+        "enum": [
+          "FRENTE",
+          "VERSO",
+          "FRENTE_E_VERSO",
+          "PAGINA",
+          "NAO_IDENTIFICADO"
+        ],
+        "title": "Lado",
+        "type": "string"
+      },
+      "MotivoCampo": {
+        "description": "Por que um campo não está limpo. Proposta da Fase 0, aprovada em 2026-11-02.",
+        "enum": [
+          "NAO_ANCORADO",
+          "ANCORAGEM_PARCIAL",
+          "LEITURAS_DIVERGENTES",
+          "DIGITO_VERIFICADOR_INVALIDO",
+          "FORMATO_INVALIDO",
+          "DATA_INVALIDA",
+          "DATA_INCOERENTE",
+          "CARACTERE_DUVIDOSO",
+          "MANUSCRITO_SEM_DUPLA_LEITURA",
+          "REGRA_NAO_IMPLEMENTADA"
+        ],
+        "title": "MotivoCampo",
+        "type": "string"
+      },
+      "MotivoErro": {
+        "enum": [
+          "BASE64_INVALIDO",
+          "TIPO_DESCONHECIDO",
+          "FORMATO_NAO_SUPORTADO",
+          "REQUISICAO_MALFORMADA",
+          "ARQUIVO_GRANDE_DEMAIS",
+          "NENHUM_DOCUMENTO",
+          "TIPO_DIVERGENTE",
+          "LADO_SEM_DADOS",
+          "IMAGEM_DESFOCADA",
+          "DOCUMENTO_CORTADO",
+          "REFLEXO_EXCESSIVO",
+          "CAMPO_CRITICO_ILEGIVEL",
+          "PROVIDER_INDISPONIVEL",
+          "TEMPO_ESGOTADO",
+          "ERRO_INTERNO"
+        ],
+        "title": "MotivoErro",
+        "type": "string"
+      },
+      "MotivoErroDetalhado": {
+        "properties": {
+          "campo": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Campo"
+          },
+          "codigo": {
+            "$ref": "#/components/schemas/MotivoErro"
+          },
+          "detalhe": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Texto curto, sem dados pessoais do documento.",
+            "title": "Detalhe"
+          }
+        },
+        "required": [
+          "codigo"
+        ],
+        "title": "MotivoErroDetalhado",
+        "type": "object"
+      },
+      "RequisicaoExtracao": {
+        "additionalProperties": false,
+        "examples": [
+          {
+            "id_externo": "opcional, para rastreio",
+            "imagem_base64": "<JPEG, PNG, WebP, HEIC ou PDF>",
+            "tipo_documento": "IDENTITY_DOCUMENT"
+          }
+        ],
+        "properties": {
+          "id_externo": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Identificador de quem chama, para rastreio.",
+            "title": "Id Externo"
+          },
+          "imagem_base64": {
+            "description": "Arquivo em base64: JPEG, PNG, WebP, HEIC ou PDF.",
+            "title": "Imagem Base64",
+            "type": "string"
+          },
+          "tipo_documento": {
+            "$ref": "#/components/schemas/TipoDocumento"
+          }
+        },
+        "required": [
+          "tipo_documento",
+          "imagem_base64"
+        ],
+        "title": "RequisicaoExtracao",
+        "type": "object"
+      },
+      "RespostaErro": {
+        "examples": [
+          {
+            "acao_sugerida": "REENVIAR_IMAGEM",
+            "erro": "DOCUMENTO_NAO_PROCESSAVEL",
+            "id_processamento": "9b1c...",
+            "motivos": [
+              {
+                "campo": "cpf",
+                "codigo": "CAMPO_CRITICO_ILEGIVEL"
+              },
+              {
+                "codigo": "REFLEXO_EXCESSIVO",
+                "detalhe": "reflexo sobre o número do registro"
+              }
+            ]
+          }
+        ],
+        "properties": {
+          "acao_sugerida": {
+            "$ref": "#/components/schemas/AcaoSugerida"
+          },
+          "erro": {
+            "$ref": "#/components/schemas/CodigoErro"
+          },
+          "id_processamento": {
+            "title": "Id Processamento",
+            "type": "string"
+          },
+          "motivos": {
+            "items": {
+              "$ref": "#/components/schemas/MotivoErroDetalhado"
+            },
+            "title": "Motivos",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id_processamento",
+          "erro",
+          "motivos",
+          "acao_sugerida"
+        ],
+        "title": "RespostaErro",
+        "type": "object"
+      },
+      "RespostaExtracao": {
+        "examples": [
+          {
+            "campos": {
+              "cpf": {
+                "motivos": [],
+                "status_leitura": "LEGIVEL",
+                "status_validacao": "VALIDO",
+                "valor": "123.456.789-09",
+                "valor_normalizado": "12345678909"
+              },
+              "data_expedicao": {
+                "motivos": [
+                  "LEITURAS_DIVERGENTES"
+                ],
+                "status_leitura": "PARCIAL",
+                "status_validacao": "NAO_VERIFICAVEL",
+                "valor": "12/03/2O15",
+                "valor_normalizado": null
+              }
+            },
+            "documento": {
+              "lado": "VERSO",
+              "subtipo": "RG_ANTIGO",
+              "uf": "SP"
+            },
+            "id_processamento": "9b1c...",
+            "sinalizacoes": [
+              "COPIA_REPROGRAFICA"
+            ],
+            "status": "REVISAO",
+            "versao_pipeline": "1.0.0+openai:<modelo>+regras:1.0"
+          }
+        ],
+        "properties": {
+          "campos": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/Campo"
+            },
+            "title": "Campos",
+            "type": "object"
+          },
+          "documento": {
+            "$ref": "#/components/schemas/Documento"
+          },
+          "id_processamento": {
+            "title": "Id Processamento",
+            "type": "string"
+          },
+          "sinalizacoes": {
+            "items": {
+              "$ref": "#/components/schemas/Sinalizacao"
+            },
+            "title": "Sinalizacoes",
+            "type": "array"
+          },
+          "status": {
+            "$ref": "#/components/schemas/StatusDocumento"
+          },
+          "versao_pipeline": {
+            "title": "Versao Pipeline",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id_processamento",
+          "status",
+          "documento",
+          "campos",
+          "versao_pipeline"
+        ],
+        "title": "RespostaExtracao",
+        "type": "object"
+      },
+      "RespostaSaude": {
+        "properties": {
+          "componentes": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Componentes",
+            "type": "object"
+          },
+          "status": {
+            "description": "ok ou degradado",
+            "title": "Status",
+            "type": "string"
+          },
+          "versao_pipeline": {
+            "title": "Versao Pipeline",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "versao_pipeline",
+          "componentes"
+        ],
+        "title": "RespostaSaude",
+        "type": "object"
+      },
+      "Sinalizacao": {
+        "description": "Sinalizações de política: informam, nunca bloqueiam.",
+        "enum": [
+          "COPIA_REPROGRAFICA",
+          "PRINT_DE_TELA",
+          "RG_ANTIGO",
+          "DOCUMENTO_VENCIDO",
+          "QR_CONFERIDO",
+          "MRZ_CONFERIDA"
+        ],
+        "title": "Sinalizacao",
+        "type": "string"
+      },
+      "StatusDocumento": {
+        "enum": [
+          "APROVADO",
+          "REVISAO"
+        ],
+        "title": "StatusDocumento",
+        "type": "string"
+      },
+      "StatusLeitura": {
+        "enum": [
+          "LEGIVEL",
+          "PARCIAL",
+          "ILEGIVEL",
+          "AUSENTE"
+        ],
+        "title": "StatusLeitura",
+        "type": "string"
+      },
+      "StatusValidacao": {
+        "enum": [
+          "VALIDO",
+          "INVALIDO",
+          "SUSPEITO",
+          "NAO_VERIFICAVEL"
+        ],
+        "title": "StatusValidacao",
+        "type": "string"
+      },
+      "Subtipo": {
+        "enum": [
+          "RG_ANTIGO",
+          "RG_2018_2022",
+          "CIN",
+          "CNH",
+          "CPF_CARTAO",
+          "CPF_COMPROVANTE",
+          "CPF_DIGITAL",
+          "CTPS_FISICA",
+          "CTPS_DIGITAL",
+          "NAO_IDENTIFICADO"
+        ],
+        "title": "Subtipo",
+        "type": "string"
+      },
+      "TipoDocumento": {
+        "description": "Tipo declarado por quem chama. Lista a confirmar com o sistema de destino.",
+        "enum": [
+          "IDENTITY_DOCUMENT",
+          "CTPS",
+          "CPF"
+        ],
+        "title": "TipoDocumento",
+        "type": "string"
+      },
+      "UF": {
+        "enum": [
+          "AC",
+          "AL",
+          "AP",
+          "AM",
+          "BA",
+          "CE",
+          "DF",
+          "ES",
+          "GO",
+          "MA",
+          "MT",
+          "MS",
+          "MG",
+          "PA",
+          "PB",
+          "PR",
+          "PE",
+          "PI",
+          "RJ",
+          "RN",
+          "RS",
+          "RO",
+          "RR",
+          "SC",
+          "SP",
+          "SE",
+          "TO",
+          "NAO_IDENTIFICADO"
+        ],
+        "title": "UF",
+        "type": "string"
+      }
+    }
+  },
+  "info": {
+    "description": "Recebe a imagem de um documento com o tipo declarado, extrai os campos e valida cada valor dentro do próprio documento.",
+    "title": "Extração e validação de documentos admissionais",
+    "version": "0.1.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/health": {
+      "get": {
+        "operationId": "saude_health_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RespostaSaude"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RespostaSaude"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Saude"
+      }
+    },
+    "/v1/extracoes": {
+      "post": {
+        "operationId": "extrair_v1_extracoes_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RequisicaoExtracao"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RespostaExtracao"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RespostaErro"
+                }
+              }
+            },
+            "description": "Requisição malformada"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RespostaErro"
+                }
+              }
+            },
+            "description": "Arquivo acima do limite"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RespostaErro"
+                }
+              }
+            },
+            "description": "Imagem válida, sem como extrair os campos críticos (código configurável em HTTP_STATUS_FALHA_EXTRACAO)"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RespostaErro"
+                }
+              }
+            },
+            "description": "Erro interno"
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RespostaErro"
+                }
+              }
+            },
+            "description": "Provider indisponível após nova tentativa e fallback"
+          },
+          "504": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RespostaErro"
+                }
+              }
+            },
+            "description": "Provider estourou o tempo após nova tentativa e fallback"
+          }
+        },
+        "summary": "Extrai e valida os campos de uma imagem de documento"
+      }
+    }
+  }
+}
