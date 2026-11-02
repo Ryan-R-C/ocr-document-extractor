@@ -61,7 +61,10 @@ app/
   regras/         motor de regras; tabelas/ com IBGE, órgãos emissores e CBO
   armazenamento/  Postgres (metadados), S3 (artefatos), TTL e limpeza
   config.py       pydantic-settings lendo .env
-avaliacao/        CLI do avaliador, métricas e relatórios
+  logs.py         logs estruturados com mascaramento de dados pessoais
+  servico.py      cache → esteira → resposta → auditoria (fora do FastAPI)
+  montagem.py     raiz de composição (configuração → providers → esteira)
+avaliacao/        CLI do avaliador, gabarito, partição, estratificação, campo apagado, métricas e relatórios
 tests/
 docs/
 ```
@@ -70,7 +73,7 @@ docs/
 
 Do plano: Python, FastAPI, Pydantic, OpenCV, Pillow, PyMuPDF, PaddleOCR, validate-docbr, PostgreSQL, armazenamento compatível com S3, contêineres Docker escalando horizontalmente.
 
-Sugestões a confirmar na Fase 0: Python 3.12, uv, pydantic-settings, SQLAlchemy 2 + Alembic, MinIO como S3 local, opencv-python-headless, pillow-heif (HEIC), httpx, pytest, ruff, mypy.
+Adotado na Fase 0 (ver `docs/decisoes.md`): Python 3.12, uv, pydantic-settings, SQLAlchemy 2 + Alembic, structlog, pypdfium2 (no lugar do PyMuPDF, AGPL), pillow-heif (HEIC), RustFS como S3 local (a imagem do MinIO saiu do Docker Hub), pytest, moto, ruff, mypy. opencv-python-headless entra com as métricas de qualidade (Fase 2).
 
 ## Convenções
 
@@ -93,8 +96,15 @@ Sugestões a confirmar na Fase 0: Python 3.12, uv, pydantic-settings, SQLAlchemy
 
 Atualize esta seção à medida que os comandos existirem.
 
-- `make setup` · `make up` · `make test` · `make lint`
-- `make avaliar CONFIG=<arquivo> PARTICAO=ajuste`
+- `make setup`: dependências, `.env` a partir do `.env.example` e gabarito sintético de demonstração
+- `make up` / `make down`: api, postgres, s3 (RustFS) e o job de limpeza via Docker Compose; o serviço `preparar` aplica as migrações e configura o bucket
+- `make test`: testes sem dependências externas (fakes, SQLite, S3 simulado com moto)
+- `make test-integracao`: testes contra o postgres e o s3 do compose
+- `make lint`: ruff, formatação e mypy
+- `make openapi`: regenera `docs/openapi.json`; o teste de contrato falha se ele divergir
+- `make avaliar CONFIG=<arquivo> PARTICAO=ajuste`: o padrão roda o gabarito sintético com os fakes
+- `uv run gabarito {sintetico,importar-csv,particionar,validar,estratificar,apagar-campos}`: ver `docs/gabarito.md`
+- `uv run limpeza [--loop]`: job de limpeza do TTL
 
 ## Decisões em aberto — não decidir sozinho
 
@@ -115,4 +125,4 @@ Levantadas na preparação do repositório:
 - Na releitura, "duas de três leituras concordam" sem o OCR entre elas (VLM principal + escalada) basta para aprovar? O padrão adotado é não: o campo fica em revisão, para respeitar "nenhum valor aprovado sem aparecer nas duas leituras".
 - PDF com várias páginas (CTPS): quais páginas processar e como juntar os campos.
 - Autenticação da API: o plano não define.
-- PyMuPDF é licenciado como AGPL: para uso em serviço, confirmar a licença ou trocar por uma alternativa permissiva (ex.: pypdfium2).
+- ~~PyMuPDF é AGPL~~: resolvido na Fase 0 com pypdfium2.
