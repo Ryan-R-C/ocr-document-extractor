@@ -1,0 +1,79 @@
+# Ambiente local: API + PostgreSQL + S3 (RustFS) + job de limpeza.
+# Uso: make up (sobe, aplica migrações e prepara o bucket) · make down
+
+x-app: &app
+  build: .
+  image: extracao-documentos:local
+  env_file: .env
+  environment:
+    DATABASE_URL: postgresql+psycopg://extracao:extracao@postgres:5432/extracao
+    S3_ENDPOINT_URL: http://s3:9000
+    FAKE_GRAVACOES_DIR: /dados/sintetico/gravacoes
+  volumes:
+    - ./dados:/dados:ro
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: extracao
+      POSTGRES_PASSWORD: extracao
+      POSTGRES_DB: extracao
+    ports: ["5432:5432"]
+    volumes: [postgres:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U extracao -d extracao"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  # S3 local. O MinIO saiu do Docker Hub (minio/minio responde 404); o RustFS é Apache 2.0,
+  # compatível com S3 e suporta SSE-S3 (criptografia em repouso) e lifecycle.
+  s3:
+    image: rustfs/rustfs:1.0.4
+    environment:
+      RUSTFS_ACCESS_KEY: ${S3_ACCESS_KEY_ID:-extracao}
+      RUSTFS_SECRET_KEY: ${S3_SECRET_ACCESS_KEY:-extracao-segredo-local}
+      # Chave mestra local para SSE-S3. Em produção, KMS do provedor de objetos.
+      RUSTFS_SSE_S3_MASTER_KEY: nkhl1SX4WFU6MnfL4zuA5rQWCMhsb72G8+QgmXaDTSk=
+    ports: ["9000:9000", "9001:9001"]
+    volumes: [s3:/data]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:9000/health"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  # Aplica as migrações e prepara o bucket (criptografia padrão e lifecycle de segurança).
+  preparar:
+    <<: *app
+    command: ["python", "-m", "app.armazenamento.preparar"]
+    restart: "no"
+    healthcheck:
+      disable: true
+    depends_on:
+      postgres:
+        condition: service_healthy
+      s3:
+        condition: service_healthy
+
+  api:
+    <<: *app
+    ports: ["8000:8000"]
+    depends_on:
+      preparar:
+        condition: service_completed_successfully
+
+  # Garante o TTL de 8 h / 16 h conferindo `expira_em` no banco.
+  limpeza:
+    <<: *app
+    command: ["python", "-m", "app.armazenamento.limpeza", "--loop"]
+    healthcheck:
+      disable: true
+    depends_on:
+      preparar:
+        condition: service_completed_successfully
+
+volumes:
+  postgres:
+  s3:
