@@ -138,7 +138,7 @@ async def gerar_variantes(
                 variante = aplicar(original, caixa, metodo)
                 destino = dir_saida / f"{Path(item.arquivo).stem}__{nome}__{metodo}.png"
                 buffer = io.BytesIO()
-                variante.save(buffer, format="PNG")
+                variante.save(buffer, format="PNG", compress_level=1)
                 conteudo = buffer.getvalue()
                 await asyncio.to_thread(destino.write_bytes, conteudo)
                 campos = dict(item.campos)
@@ -165,7 +165,7 @@ def _abrir(caminho: Path) -> Image.Image:
 
 def _para_imagem(imagem: Image.Image, sha256_origem: str) -> Imagem:
     buffer = io.BytesIO()
-    imagem.save(buffer, format="PNG")
+    imagem.save(buffer, format="PNG", compress_level=1)
     conteudo = buffer.getvalue()
     return Imagem(
         conteudo=conteudo,

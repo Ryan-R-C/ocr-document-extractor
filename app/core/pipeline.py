@@ -152,7 +152,7 @@ def _recortar(imagem: Imagem, caixa: Caixa, margem: float = 0.15) -> bytes:
         min(pil.height, caixa.y + caixa.altura + my),
     )
     buffer = io.BytesIO()
-    pil.crop(area).save(buffer, format="PNG")
+    pil.crop(area).save(buffer, format="PNG", compress_level=1)
     return buffer.getvalue()
 
 
@@ -239,6 +239,10 @@ class Esteira:
             )
         imagem = rastro.imagem_preparada
         assert imagem is not None
+        # Tempo total da leitura visual, comparável entre os dois desenhos.
+        rastro.tempos_ms["visual_total"] = rastro.tempos_ms.get(
+            "classificacao", 0.0
+        ) + rastro.tempos_ms.get("leituras", 0.0)
         rastro.leitura_visual = leitura_visual
         rastro.leitura_texto = leitura_texto
         rastro.versao_pipeline = versao_pipeline(

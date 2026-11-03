@@ -301,6 +301,10 @@ def gerar(
                 campos=lidos,
                 tokens_entrada=3420,
                 tokens_saida=600,
+                # Desenho em duas etapas: classificação com a mesma imagem e prompt curto.
+                classificacao_tokens_entrada=2300,
+                classificacao_tokens_saida=60,
+                classificacao_latencia_ms=round(500 + rng.random() * 400, 1),
                 latencia_ms=round(900 + rng.random() * 1400, 1),
             ),
             leitura_texto=LeituraTextoGravada(

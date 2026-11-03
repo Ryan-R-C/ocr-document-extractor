@@ -160,11 +160,73 @@ def test_localizador_por_ocr_acha_o_valor_sem_caixa(gabarito: Path, tmp_path: Pa
     assert len(com.itens) == 2 * len(itens)
 
 
-def test_modo_batch_e_flex_previstos_mas_nao_implementados(gabarito: Path, tmp_path: Path) -> None:
-    for modo in ("batch", "flex"):
-        config = _config(gabarito, tmp_path, modo=modo)
-        with pytest.raises(ModoNaoImplementado, match="Fase 1"):
-            asyncio.run(avaliar(config, "ajuste", settings=_settings(config)))
+def test_batch_exige_provider_com_batch(gabarito: Path, tmp_path: Path) -> None:
+    config = _config(gabarito, tmp_path, modo="batch")
+    with pytest.raises(ModoNaoImplementado, match="Batch não disponível"):
+        asyncio.run(avaliar(config, "ajuste", settings=_settings(config)))
+
+
+def test_flex_cobra_metade(gabarito: Path, tmp_path: Path) -> None:
+    padrao = _config(gabarito, tmp_path / "p")
+    padrao.campo_apagado.ativo = False
+    flex = _config(gabarito, tmp_path / "f", modo="flex")
+    flex.campo_apagado.ativo = False
+    r_padrao, _ = asyncio.run(avaliar(padrao, "ajuste", settings=_settings(padrao)))
+    r_flex, _ = asyncio.run(avaliar(flex, "ajuste", settings=_settings(flex)))
+    assert r_flex["metricas"]["geral"]["custo_brl"]["media"] == pytest.approx(
+        r_padrao["metricas"]["geral"]["custo_brl"]["media"] / 2
+    )
+    assert r_flex["execucao"]["modo"] == "flex"
+
+
+def test_modo_medicao_e_secoes_da_fase_1(gabarito: Path, tmp_path: Path) -> None:
+    config = _config(gabarito, tmp_path)
+    relatorio, pasta = asyncio.run(avaliar(config, "ajuste", settings=_settings(config)))
+    m = relatorio["metricas"]
+    itens = [i for i in ler_manifesto(gabarito / "manifesto.jsonl") if i.particao == "ajuste"]
+    medicao = m["geral"]["medicao"]
+    # Sem segundo leitor nada é aprovado, mas a medição aprova todo LEGIVEL.
+    assert m["geral"]["criticos_aprovados"] == 0
+    assert medicao["criticos_aprovados"] > 0
+    if any(i.origem == "sintetico:digito_trocado" for i in itens):
+        assert medicao["erros_escapados"] >= 1
+    assert m["geral"]["uf_correta"] == 1.0 and m["geral"]["lado_correto"] == 1.0
+    assert set(m["captura"]) == {"COPIA_REPROGRAFICA", "PRINT_DE_TELA"}
+    assert m["tokens"]["leitura_visual"]["entrada_media"] == 3420
+    assert m["custo_plano"]["plano_brl"] == 0.04
+    for caso in m["piores_casos"]:
+        assert len(caso["id"]) == 12 and "arquivo" not in caso
+    texto = (pasta / "relatorio.md").read_text(encoding="utf-8")
+    for secao in (
+        "Modo medição",
+        "Classificação",
+        "Sinalizações de captura",
+        "Tokens por etapa",
+        "Custo comparado ao plano",
+        "Piores casos",
+    ):
+        assert secao in texto
+    # Ids no lugar de nomes de arquivo.
+    assert "sint_" not in texto
+
+
+def test_desenhos_comparados(gabarito: Path, tmp_path: Path) -> None:
+    from avaliacao.cli import main_comparar
+
+    relatorios = []
+    for desenho in ("unico", "duas_etapas"):
+        config = _config(gabarito, tmp_path / desenho)
+        config.nome = desenho
+        config.settings["leitor_visual_desenho"] = desenho
+        config.campo_apagado.ativo = False
+        relatorio, pasta = asyncio.run(avaliar(config, "ajuste", settings=_settings(config)))
+        relatorios.append(pasta / "relatorio.json")
+        assert relatorio["metricas"]["geral"]["subtipo_correto"] == 1.0
+    saida = tmp_path / "comparacao.md"
+    assert main_comparar([*map(str, relatorios), "--saida", str(saida)]) == 0
+    texto = saida.read_text(encoding="utf-8")
+    assert "| Desenho | unico | duas_etapas" in texto
+    assert "classificacao" in texto  # tokens da 1ª chamada do desenho em duas etapas
 
 
 def test_cli_avaliar(gabarito: Path, tmp_path: Path) -> None:
@@ -187,7 +249,9 @@ ativo = false
     assert main_avaliar(["--config", str(config), "--particao", "holdout"]) == 0
     [relatorio] = list((tmp_path / "saida").glob("cli-holdout-*/relatorio.md"))
     assert "Holdout." in relatorio.read_text(encoding="utf-8")
-    assert main_avaliar(["--config", str(config), "--particao", "ajuste", "--modo", "batch"]) == 2
+    assert (
+        main_avaliar(["--config", str(config), "--particao", "ajuste", "--modo", "batch"]) == 2
+    )  # fake não tem Batch
 
 
 def test_manifesto_sem_particao_e_recusado(gabarito: Path, tmp_path: Path) -> None:

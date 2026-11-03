@@ -174,7 +174,8 @@ def normalizar_pil(arquivo: ArquivoRecebido, settings: Settings) -> tuple[Image.
 
 def para_imagem(imagem: Image.Image, sha256_origem: str) -> Imagem:
     buffer = io.BytesIO()
-    imagem.save(buffer, format="PNG")
+    # Compressão leve: PNG sem perda e determinístico, bem mais rápido que o padrão (6).
+    imagem.save(buffer, format="PNG", compress_level=1)
     conteudo = buffer.getvalue()
     return Imagem(
         conteudo=conteudo,

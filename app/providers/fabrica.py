@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from app.config import Settings
 from app.providers.composicao import LeitorTextoComposto, LeitorVisualComposto
 from app.providers.interfaces import (
@@ -104,4 +106,21 @@ def criar_dependencias(settings: Settings) -> Dependencias:
             _texto(settings.leitor_texto_provider, settings), settings.provider_timeout_s
         ),
         localizador=_localizador(settings.localizador_provider, settings),
+    )
+
+
+def criar_dependencias_batch(settings: Settings, diretorio_estado: Path) -> Dependencias:
+    """Dependências para a rodada Batch do avaliador: o leitor visual vira um coletor de
+    lote (sem o tempo limite da composição, porque um lote leva até 24 h)."""
+    if settings.leitor_visual_provider != "openai":
+        raise ProviderNaoImplementado(
+            f"Batch não disponível para o leitor visual {settings.leitor_visual_provider!r}"
+        )
+    from app.providers.openai import LeitorVisualOpenAI
+    from app.providers.openai.batch import ColetorBatch
+
+    base = criar_dependencias(settings.model_copy(update={"leitor_visual_provider": "fake"}))
+    coletor = ColetorBatch(LeitorVisualOpenAI(settings), diretorio_estado)
+    return Dependencias(
+        leitor_visual=coletor, leitor_texto=base.leitor_texto, localizador=base.localizador
     )

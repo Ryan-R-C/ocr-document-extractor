@@ -31,12 +31,39 @@ from avaliacao.gabarito import ItemGabarito
 META_ERRO_ESCAPADO = 0.005
 META_CUSTO_MEDIO_BRL = 0.15
 
+# Plano, "Custos estimados" (R$ por documento, leitura principal + escalada; inclui 30% dos
+# documentos com dois campos relidos pelo modelo de escalada).
+PLANO_CUSTO_BRL: dict[tuple[str, str], float] = {
+    ("gpt-6-luna", "gpt-6.1-sol"): 0.01,
+    ("gpt-6.1-terra", "gpt-6.1-sol"): 0.04,
+    ("gpt-6.1-sol", "gpt-6-astra"): 0.10,
+    ("gpt-6-astra", "gpt-6-astra"): 0.37,
+}
+# Plano: 1.920 tokens de imagem (1.600 patches × 1,2) + 1.500 de instruções e schema.
+PLANO_TOKENS_IMAGEM = 1920
+PLANO_TOKENS_ENTRADA = 3420
+PLANO_TOKENS_SAIDA = 600
+
+
+@dataclass(frozen=True)
+class RegistroChamada:
+    etapa: str
+    modelo: str
+    entrada: int
+    saida: int
+    raciocinio: int
+    imagem_estimada: int
+    custo_brl: float
+    latencia_ms: float
+
 
 @dataclass(frozen=True)
 class RegistroDocumento:
+    id: str  # sha256 curto do arquivo: identifica o caso sem dado pessoal
     arquivo: str
     subtipo: str
     uf: str
+    lado: str
     qualidade: str
     variante: bool
     desfecho: str  # APROVADO | REVISAO | RECUSADO | ERRO_PROVIDER | ERRO_REQUISICAO
@@ -44,6 +71,14 @@ class RegistroDocumento:
     subtipo_previsto: str | None
     custo_brl: float
     tempos_ms: dict[str, float]
+    uf_prevista: str | None = None
+    lado_previsto: str | None = None
+    # Captura: o que o VLM disse, o que a heurística em CPU disse e o que saiu na resposta.
+    captura_vlm: str | None = None
+    copia_heuristica: bool | None = None
+    print_heuristica: bool | None = None
+    sinalizacoes: tuple[str, ...] = ()
+    chamadas: tuple[RegistroChamada, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -60,6 +95,8 @@ class RegistroCampo:
     doc_aprovado: bool
     devolveu_valor: bool
     correto: bool | None  # None quando o gabarito não tem valor
+    id: str = ""
+    status_leitura: str | None = None
 
     @property
     def alucinacao(self) -> bool:
@@ -70,6 +107,16 @@ class RegistroCampo:
         if not (self.doc_aprovado and self.critico):
             return False
         return self.alucinacao or self.correto is False
+
+    # Modo medição: o que aconteceria se todo campo LEGIVEL fosse aprovado direto, sem
+    # segundo leitor nem regras. É o baseline das Fases 2 e 3.
+    @property
+    def aprovado_medicao(self) -> bool:
+        return self.status_leitura == "LEGIVEL"
+
+    @property
+    def erro_escapado_medicao(self) -> bool:
+        return self.critico and self.aprovado_medicao and (self.alucinacao or self.correto is False)
 
 
 @dataclass
@@ -95,18 +142,43 @@ def registrar(registros: Registros, item: ItemGabarito, resultado: ResultadoPipe
     desfecho, motivos = _desfecho(resultado)
     resposta = resultado.resposta
     variante = item.variante_de is not None
+    rastro = resultado.rastro
+    classificacao = rastro.leitura_visual or rastro.classificacao
+    captura = rastro.captura
     registros.documentos.append(
         RegistroDocumento(
+            id=item.sha256[:12],
             arquivo=item.arquivo,
             subtipo=item.subtipo.value,
             uf=item.uf.value,
+            lado=item.lado.value,
             qualidade=item.qualidade,
             variante=variante,
             desfecho=desfecho,
             motivos=motivos,
-            subtipo_previsto=resposta.documento.subtipo.value if resposta else None,
-            custo_brl=resultado.rastro.custo_brl,
-            tempos_ms=dict(resultado.rastro.tempos_ms),
+            subtipo_previsto=classificacao.subtipo.value if classificacao else None,
+            custo_brl=rastro.custo_brl,
+            tempos_ms=dict(rastro.tempos_ms),
+            uf_prevista=classificacao.uf.value if classificacao else None,
+            lado_previsto=classificacao.lado.value if classificacao else None,
+            captura_vlm=classificacao.qualidade_captura.value if classificacao else None,
+            copia_heuristica=captura.copia_reprografica if captura else None,
+            print_heuristica=captura.print_de_tela if captura else None,
+            sinalizacoes=tuple(s.value for s in resposta.sinalizacoes) if resposta else (),
+            chamadas=tuple(
+                RegistroChamada(
+                    etapa=c.etapa,
+                    modelo=c.modelo,
+                    entrada=c.tokens_entrada,
+                    saida=c.tokens_saida,
+                    raciocinio=c.tokens_raciocinio,
+                    imagem_estimada=c.tokens_imagem_estimados,
+                    custo_brl=c.custo_brl,
+                    latencia_ms=c.latencia_ms,
+                )
+                for c in rastro.chamadas
+                if c.tokens_entrada or c.tokens_saida
+            ),
         )
     )
     aprovado = resposta is not None and resposta.status is StatusDocumento.APROVADO
@@ -133,6 +205,8 @@ def registrar(registros: Registros, item: ItemGabarito, resultado: ResultadoPipe
                 doc_aprovado=aprovado,
                 devolveu_valor=devolveu_valor,
                 correto=correto,
+                id=item.sha256[:12],
+                status_leitura=devolvido.status_leitura.value if devolvido else None,
             )
         )
 
@@ -175,6 +249,14 @@ def _metricas_documentos(docs: Sequence[RegistroDocumento]) -> dict[str, Any]:
             sum(1 for d in docs if d.subtipo_previsto == d.subtipo),
             sum(1 for d in docs if d.subtipo_previsto is not None),
         ),
+        "uf_correta": _taxa(
+            sum(1 for d in docs if d.uf_prevista == d.uf),
+            sum(1 for d in docs if d.uf_prevista is not None),
+        ),
+        "lado_correto": _taxa(
+            sum(1 for d in docs if d.lado_previsto == d.lado),
+            sum(1 for d in docs if d.lado_previsto is not None),
+        ),
         "custo_brl": {
             "media": sum(custos) / n if n else None,
             "p95": percentil(custos, 95),
@@ -203,6 +285,20 @@ def _metricas_campos(campos: Sequence[RegistroCampo]) -> dict[str, Any]:
             sum(1 for c in com_valor if c.correto and c.critico),
             sum(1 for c in com_valor if c.critico),
         ),
+        "medicao": _metricas_medicao(campos),
+    }
+
+
+def _metricas_medicao(campos: Sequence[RegistroCampo]) -> dict[str, Any]:
+    """Baseline: todo campo LEGIVEL aprovado direto."""
+    criticos = [c for c in campos if c.critico and c.aprovado_medicao]
+    escapados = sum(1 for c in criticos if c.erro_escapado_medicao)
+    return {
+        "criticos_aprovados": len(criticos),
+        "erros_escapados": escapados,
+        "taxa_erro_escapado": _taxa(escapados, len(criticos)),
+        "alucinacoes_criticos": sum(1 for c in criticos if c.alucinacao),
+        "alucinacoes": sum(1 for c in campos if c.aprovado_medicao and c.alucinacao),
     }
 
 
@@ -213,7 +309,112 @@ def _agrupar[T](itens: Iterable[T], chave: Callable[[T], str]) -> dict[str, list
     return dict(sorted(grupos.items()))
 
 
-def calcular(registros: Registros) -> dict[str, Any]:
+def _precisao_revocacao(previstos: Sequence[bool], reais: Sequence[bool]) -> dict[str, Any]:
+    vp = sum(1 for p, r in zip(previstos, reais, strict=True) if p and r)
+    fp = sum(1 for p, r in zip(previstos, reais, strict=True) if p and not r)
+    fn = sum(1 for p, r in zip(previstos, reais, strict=True) if not p and r)
+    return {
+        "precisao": _taxa(vp, vp + fp),
+        "revocacao": _taxa(vp, vp + fn),
+        "vp": vp,
+        "fp": fp,
+        "fn": fn,
+    }
+
+
+_COM_RESPOSTA = ("APROVADO", "REVISAO")
+
+
+def _captura(docs: Sequence[RegistroDocumento]) -> dict[str, Any]:
+    """Precisão e revocação das sinalizações de captura contra a qualidade do gabarito."""
+    com_leitura = [d for d in docs if d.captura_vlm is not None]
+    resultado: dict[str, Any] = {}
+    for sinal, qualidade, rotulo_vlm, heuristica in (
+        ("COPIA_REPROGRAFICA", "xerox", "COPIA_REPROGRAFICA", "copia_heuristica"),
+        ("PRINT_DE_TELA", "print", "PRINT_DE_TELA", "print_heuristica"),
+    ):
+        reais = [d.qualidade == qualidade for d in com_leitura]
+        resultado[sinal] = {
+            "vlm": _precisao_revocacao([d.captura_vlm == rotulo_vlm for d in com_leitura], reais),
+            "heuristica": _precisao_revocacao(
+                [bool(getattr(d, heuristica)) for d in com_leitura], reais
+            ),
+            # Só documentos com resposta 200 (as recusas não levam sinalização).
+            "resposta": _precisao_revocacao(
+                [sinal in d.sinalizacoes for d in com_leitura if d.desfecho in _COM_RESPOSTA],
+                [d.qualidade == qualidade for d in com_leitura if d.desfecho in _COM_RESPOSTA],
+            ),
+        }
+    return resultado
+
+
+def _media(valores: Sequence[float]) -> float | None:
+    return sum(valores) / len(valores) if valores else None
+
+
+def _tokens(docs: Sequence[RegistroDocumento]) -> dict[str, Any]:
+    """Tokens medidos por etapa, comparados à estimativa do plano."""
+    por_etapa: dict[str, list[RegistroChamada]] = defaultdict(list)
+    for d in docs:
+        for c in d.chamadas:
+            por_etapa[c.etapa].append(c)
+    return {
+        etapa: {
+            "chamadas": len(cs),
+            "modelos": sorted({c.modelo for c in cs}),
+            "entrada_media": _media([c.entrada for c in cs]),
+            "entrada_p95": percentil([c.entrada for c in cs], 95),
+            "saida_media": _media([c.saida for c in cs]),
+            "raciocinio_medio": _media([c.raciocinio for c in cs]),
+            "imagem_estimada_media": _media([c.imagem_estimada for c in cs]),
+            "custo_medio_brl": _media([c.custo_brl for c in cs]),
+            "latencia_p50_ms": percentil([c.latencia_ms for c in cs], 50),
+            "latencia_p95_ms": percentil([c.latencia_ms for c in cs], 95),
+            "plano": {
+                "entrada": PLANO_TOKENS_ENTRADA,
+                "imagem": PLANO_TOKENS_IMAGEM,
+                "saida": PLANO_TOKENS_SAIDA,
+            },
+        }
+        for etapa, cs in sorted(por_etapa.items())
+    }
+
+
+def _piores_casos(
+    docs: Sequence[RegistroDocumento], campos: Sequence[RegistroCampo], limite: int = 15
+) -> list[dict[str, Any]]:
+    """Documentos com mais problemas no modo medição (alucinação pesa mais que erro)."""
+    por_doc: dict[str, list[RegistroCampo]] = defaultdict(list)
+    for c in campos:
+        por_doc[c.id].append(c)
+    casos: list[dict[str, Any]] = []
+    for d in docs:
+        cs = por_doc.get(d.id, [])
+        alucinacoes = [c.campo for c in cs if c.alucinacao]
+        errados = [c.campo for c in cs if c.correto is False]
+        criticos_errados = [c.campo for c in cs if c.correto is False and c.critico]
+        classificacao = d.subtipo_previsto not in (None, d.subtipo)
+        pontos = 3 * len(alucinacoes) + 2 * len(criticos_errados) + len(errados) + 2 * classificacao
+        if pontos:
+            casos.append(
+                {
+                    "id": d.id,
+                    "subtipo": d.subtipo,
+                    "uf": d.uf,
+                    "qualidade": d.qualidade,
+                    "desfecho": d.desfecho,
+                    "alucinacoes": alucinacoes,
+                    "campos_errados": errados,
+                    "subtipo_previsto": d.subtipo_previsto,
+                    "pontos": pontos,
+                }
+            )
+    return sorted(casos, key=lambda c: (-int(c["pontos"]), str(c["id"])))[:limite]
+
+
+def calcular(
+    registros: Registros, referencia_plano: tuple[str, str] | None = None
+) -> dict[str, Any]:
     docs = [d for d in registros.documentos if not d.variante]
     campos = [c for c in registros.campos if not c.variante]
     docs_var = [d for d in registros.documentos if d.variante]
@@ -263,7 +464,7 @@ def calcular(registros: Registros) -> dict[str, Any]:
     }
     erros_escapados = [
         {
-            "arquivo": c.arquivo,
+            "id": c.id,
             "campo": c.campo,
             "tipo": "alucinacao" if c.alucinacao else "valor_errado",
         }
@@ -271,15 +472,36 @@ def calcular(registros: Registros) -> dict[str, Any]:
         if c.erro_escapado
     ]
     alucinacoes = [
-        {"arquivo": c.arquivo, "campo": c.campo, "critico": c.critico, "aprovado": c.doc_aprovado}
+        {
+            "id": c.id,
+            "campo": c.campo,
+            "critico": c.critico,
+            "aprovado": c.doc_aprovado,
+            "aprovado_medicao": c.aprovado_medicao,
+            "campo_apagado": c.campo_apagado,
+        }
         for c in todos_campos
         if c.alucinacao
     ]
+    campo_apagado["medicao_alucinacoes"] = sum(
+        1 for c in apagados if c.alucinacao and c.aprovado_medicao
+    )
+    custo_plano = PLANO_CUSTO_BRL.get(referencia_plano) if referencia_plano else None
     return {
         "geral": geral,
         "metas": metas,
         "por": por,
         "campo_apagado": campo_apagado,
+        "captura": _captura(docs),
+        "tokens": _tokens(docs),
+        "custo_plano": {
+            "configuracao": list(referencia_plano) if referencia_plano else None,
+            "plano_brl": custo_plano,
+            "medido_medio_brl": geral["custo_brl"]["media"],
+            "medido_p95_brl": geral["custo_brl"]["p95"],
+            "observacao": "o plano inclui escalada em 30% dos documentos; a Fase 1 não relê",
+        },
+        "piores_casos": _piores_casos(docs, campos),
         "erros_escapados": erros_escapados,
         "alucinacoes": alucinacoes,
     }

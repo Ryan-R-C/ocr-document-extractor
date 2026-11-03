@@ -1,9 +1,10 @@
 # Comandos do projeto. Requer uv (https://docs.astral.sh/uv/) e Docker.
-.PHONY: setup up down logs test test-integracao lint formatar openapi avaliar \
+.PHONY: setup up down logs test test-integracao lint formatar openapi avaliar comparar \
         gabarito-sintetico estratificar limpeza
 
 CONFIG ?= avaliacao/configs/sintetico.toml
 PARTICAO ?= ajuste
+MODO ?= padrao
 MANIFESTO ?= dados/sintetico/manifesto.jsonl
 
 setup:  ## dependências, .env local e gabarito sintético de demonstração
@@ -38,8 +39,11 @@ formatar:
 openapi:  ## regenera docs/openapi.json (revise o diff antes de commitar)
 	uv run python -m app.api.openapi
 
-avaliar:  ## make avaliar CONFIG=<arquivo.toml> PARTICAO=ajuste|holdout
-	uv run avaliar --config $(CONFIG) --particao $(PARTICAO)
+avaliar:  ## make avaliar CONFIG=<arquivo.toml> PARTICAO=ajuste|holdout MODO=padrao|flex|batch
+	uv run avaliar --config $(CONFIG) --particao $(PARTICAO) --modo $(MODO)
+
+comparar:  ## make comparar RELATORIOS="saidas/avaliacoes/a/relatorio.json saidas/avaliacoes/b/relatorio.json"
+	uv run comparar $(RELATORIOS) --saida saidas/comparacao.md
 
 gabarito-sintetico:
 	uv run gabarito sintetico --saida dados/sintetico

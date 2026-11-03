@@ -141,5 +141,20 @@ def main_gabarito(argv: list[str] | None = None) -> int:
     return 0
 
 
+def main_comparar(argv: list[str] | None = None) -> int:
+    from avaliacao.comparacao import carregar, comparar
+
+    parser = argparse.ArgumentParser(prog="comparar", description="Compara rodadas do avaliador.")
+    parser.add_argument("relatorios", type=Path, nargs="+", help="relatorio.json de cada rodada")
+    parser.add_argument("--saida", type=Path, default=None, help="grava a comparação em Markdown")
+    args = parser.parse_args(argv)
+    texto = comparar(carregar(args.relatorios))
+    if args.saida:
+        args.saida.parent.mkdir(parents=True, exist_ok=True)
+        args.saida.write_text(texto, encoding="utf-8")
+    print(texto)
+    return 0
+
+
 if __name__ == "__main__":
     raise SystemExit(main_avaliar())

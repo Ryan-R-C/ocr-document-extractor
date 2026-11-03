@@ -19,6 +19,7 @@ from app.core.erros import FalhaRequisicao
 from app.core.pipeline import Esteira, ResultadoPipeline
 from app.montagem import criar_esteira
 from app.preprocess.decodificacao import ArquivoRecebido, detectar_formato
+from app.providers.fabrica import ProviderNaoImplementado, criar_dependencias_batch
 from app.providers.interfaces import ModoChamada
 from avaliacao import campo_apagado, metricas, relatorio
 from avaliacao.campo_apagado import METODOS, LocalizadorValorPorOCR, Metodo
@@ -90,12 +91,17 @@ async def avaliar(
     agora: datetime | None = None,
 ) -> tuple[dict[str, Any], Path]:
     """Roda a avaliação e grava `relatorio.md` e `relatorio.json`. Devolve (relatório, pasta)."""
-    if config.modo is not ModoChamada.PADRAO:
-        raise ModoNaoImplementado(
-            f"modo {config.modo.value}: a rodada Batch/Flex será implementada na Fase 1"
-        )
     settings = settings or Settings(**config.settings)
-    esteira = criar_esteira(settings)
+    if config.modo is ModoChamada.BATCH:
+        # Estado estável (sem data no nome) para retomar a rodada de onde parou.
+        estado = config.saida / "batch" / f"{config.nome}-{particao}"
+        try:
+            esteira = Esteira(settings, criar_dependencias_batch(settings, estado))
+        except ProviderNaoImplementado as erro:
+            raise ModoNaoImplementado(str(erro)) from None
+    else:
+        # Flex vai em cada chamada (service_tier) pelo próprio adaptador.
+        esteira = criar_esteira(settings)
     inicio = agora or datetime.now(UTC)
     relogio = time.perf_counter()
 
@@ -131,7 +137,11 @@ async def avaliar(
             config.campo_apagado.campos_por_item or None,
         )
 
-    semaforo = asyncio.Semaphore(config.concorrencia)
+    # Batch: todas as esteiras ao mesmo tempo, para as chamadas caírem no mesmo lote.
+    total = len(itens) + len(variantes.itens)
+    semaforo = asyncio.Semaphore(
+        max(1, total) if config.modo is ModoChamada.BATCH else config.concorrencia
+    )
 
     async def um(diretorio: Path, item: ItemGabarito) -> tuple[ItemGabarito, ResultadoPipeline]:
         async with semaforo:
@@ -158,8 +168,20 @@ async def avaliar(
             "variantes": len(variantes.itens),
             "campo_apagado_pulados_sem_caixa": variantes.pulados_sem_caixa,
             "campo_apagado_pulados_formato": variantes.pulados_formato,
+            "leitor_visual": f"{settings.leitor_visual_provider}:{settings.leitor_visual_modelo}",
+            "desenho": settings.leitor_visual_desenho
+            + (
+                f" (classificação: {settings.leitor_visual_modelo_classificacao})"
+                if settings.leitor_visual_desenho == "duas_etapas"
+                else ""
+            ),
+            "detalhe": settings.leitor_visual_detalhe,
+            "raciocinio": settings.leitor_visual_esforco_raciocinio or "padrão do modelo",
         },
-        "metricas": metricas.calcular(registros),
+        "metricas": metricas.calcular(
+            registros,
+            (settings.leitor_visual_modelo, settings.leitor_visual_modelo_escalada),
+        ),
     }
     (pasta / "relatorio.json").write_text(
         json.dumps(resultado_final, ensure_ascii=False, indent=2, default=str), encoding="utf-8"

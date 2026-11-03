@@ -25,6 +25,7 @@ dependencies = [
 [project.scripts]
 avaliar = "avaliacao.cli:main_avaliar"
 gabarito = "avaliacao.cli:main_gabarito"
+comparar = "avaliacao.cli:main_comparar"
 limpeza = "app.armazenamento.limpeza:main"
 
 [dependency-groups]
@@ -57,6 +58,7 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S", "B", "PT011", "PT018", "E501"]
+"avaliacao/relatorio.py" = ["E501"]  # linhas de tabela Markdown
 
 [tool.mypy]
 python_version = "3.12"

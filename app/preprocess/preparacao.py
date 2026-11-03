@@ -33,9 +33,11 @@ def preparar(arquivo: ArquivoRecebido, settings: Settings) -> ImagemPreparada:
     avaliacao = qualidade.avaliar(pil, localizado, settings)
     indicios = captura.analisar(localizado.imagem, settings)
     final = documento.limitar_resolucao(localizado.imagem, settings)
+    normalizada = para_imagem(pil, arquivo.sha256)
     return ImagemPreparada(
-        imagem=para_imagem(final, arquivo.sha256),
-        normalizada=para_imagem(pil, arquivo.sha256),
+        # Sem recorte nem redução, a imagem enviada é a própria normalizada.
+        imagem=normalizada if final is pil else para_imagem(final, arquivo.sha256),
+        normalizada=normalizada,
         paginas_pdf=paginas,
         documento=localizado,
         qualidade=avaliacao,

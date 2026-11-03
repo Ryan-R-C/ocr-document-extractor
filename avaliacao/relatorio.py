@@ -1,4 +1,8 @@
-"""Relatório do avaliador em Markdown e JSON. Só contagens, taxas, nomes de campo e de arquivo."""
+"""Relatório do avaliador em Markdown e JSON.
+
+Só contagens, taxas, nomes de campo e ids de caso (sha256 curto do arquivo): nada de valor
+de campo nem nome de arquivo, que pode carregar dado pessoal.
+"""
 
 from __future__ import annotations
 
@@ -15,6 +19,10 @@ def _brl(valor: float | None) -> str:
 
 def _ms(valor: float | None) -> str:
     return "—" if valor is None else f"{valor:.0f} ms"
+
+
+def _num(valor: float | None) -> str:
+    return "—" if valor is None else f"{valor:,.0f}".replace(",", ".")
 
 
 def _ok(atingida: bool | None) -> str:
@@ -69,6 +77,8 @@ def markdown(relatorio: dict[str, Any]) -> str:
         f"- versao_pipeline: `{meta['versao_pipeline']}`",
         f"- Modo: {meta['modo']} · gabarito: `{meta['gabarito']}` · itens: {meta['itens']} "
         f"(+ {meta['variantes']} variantes de campo apagado)",
+        f"- Leitor visual: {meta.get('leitor_visual', '—')} · desenho: {meta.get('desenho', '—')} "
+        f"· detalhe: {meta.get('detalhe', '—')} · raciocínio: {meta.get('raciocinio', '—')}",
         "",
         "## Metas",
         "",
@@ -109,17 +119,77 @@ def markdown(relatorio: dict[str, Any]) -> str:
         f"| {etapa} | {_ms(v['p50'])} | {_ms(v['p95'])} |" for etapa, v in g["latencia_ms"].items()
     ]
 
+    med = g["medicao"]
+    linhas += [
+        "",
+        "## Modo medição (baseline)",
+        "",
+        "Se todo campo `LEGIVEL` fosse aprovado direto, sem segundo leitor nem regras:",
+        "",
+        "| Métrica | Valor |",
+        "|---|---|",
+        f"| Erro escapado (críticos) | {_pct(med['taxa_erro_escapado'])} "
+        f"({med['erros_escapados']}/{med['criticos_aprovados']}) |",
+        f"| Alucinações em críticos | {med['alucinacoes_criticos']} |",
+        f"| Alucinações (todos os campos) | {med['alucinacoes']} |",
+        f"| Alucinações no campo apagado | {m['campo_apagado'].get('medicao_alucinacoes', 0)} |",
+        "",
+        "## Classificação",
+        "",
+        f"- Subtipo correto: {_pct(g['subtipo_correto'])} · UF correta: {_pct(g['uf_correta'])} "
+        f"· lado correto: {_pct(g['lado_correto'])}",
+        "",
+        "### Sinalizações de captura (contra a qualidade do gabarito)",
+        "",
+        "| Sinalização | Fonte | Precisão | Revocação | VP | FP | FN |",
+        "|---|---|---|---|---|---|---|",
+    ]
+    for sinal, fontes in m.get("captura", {}).items():
+        for fonte, r in fontes.items():
+            linhas.append(
+                f"| {sinal} | {fonte} | {_pct(r['precisao'])} | {_pct(r['revocacao'])} | "
+                f"{r['vp']} | {r['fp']} | {r['fn']} |"
+            )
+    linhas += [
+        "",
+        "## Tokens por etapa (comparação com o plano)",
+        "",
+        "Plano: 3.420 de entrada (1.920 de imagem + 1.500 de instruções e schema) e 600 de saída.",
+        "",
+        "| Etapa | Modelos | Chamadas | Entrada média | Entrada p95 | Imagem estimada | "
+        "Saída média | Raciocínio | Custo médio | Latência p50/p95 |",
+        "|---|---|---|---|---|---|---|---|---|---|",
+    ]
+    for etapa, t in m.get("tokens", {}).items():
+        linhas.append(
+            f"| {etapa} | {', '.join(t['modelos'])} | {t['chamadas']} | {_num(t['entrada_media'])} | "
+            f"{_num(t['entrada_p95'])} | {_num(t['imagem_estimada_media'])} | "
+            f"{_num(t['saida_media'])} | {_num(t['raciocinio_medio'])} | "
+            f"{_brl(t['custo_medio_brl'])} | {_ms(t['latencia_p50_ms'])} / {_ms(t['latencia_p95_ms'])} |"
+        )
+    cp = m.get("custo_plano", {})
+    linhas += [
+        "",
+        "## Custo comparado ao plano",
+        "",
+        f"- Configuração: {' + '.join(cp.get('configuracao') or []) or '—'} · plano: "
+        f"{_brl(cp.get('plano_brl'))} · medido: média {_brl(cp.get('medido_medio_brl'))}, "
+        f"p95 {_brl(cp.get('medido_p95_brl'))}",
+        f"- Observação: {cp.get('observacao', '')}",
+    ]
     linhas += [
         "",
         "## Por campo",
         "",
-        "| Campo | Crítico | Acurácia | Erro escapado | Alucinações |",
-        "|---|---|---|---|---|",
+        "| Campo | Crítico | Acurácia | Erro escapado | Erro escapado (medição) | Alucinações |",
+        "|---|---|---|---|---|---|",
     ]
     for nome, c in m["por"]["campo"].items():
+        cm = c["medicao"]
         linhas.append(
             f"| {nome} | {c['critico']} | {_pct(c['acuracia'])} | "
             f"{_pct(c['taxa_erro_escapado'])} ({c['erros_escapados']}/{c['criticos_aprovados']}) | "
+            f"{_pct(cm['taxa_erro_escapado'])} ({cm['erros_escapados']}/{cm['criticos_aprovados']}) | "
             f"{c['alucinacoes']} |"
         )
     for dimensao, titulo in (
@@ -142,20 +212,35 @@ def markdown(relatorio: dict[str, Any]) -> str:
         f"- Pulados por falta de caixa: {meta['campo_apagado_pulados_sem_caixa']} · "
         f"por formato (PDF): {meta['campo_apagado_pulados_formato']}",
     ]
+    if m.get("piores_casos"):
+        linhas += [
+            "",
+            "## Piores casos",
+            "",
+            "| Id | Subtipo | UF | Qualidade | Desfecho | Alucinações | Campos errados | Subtipo lido |",
+            "|---|---|---|---|---|---|---|---|",
+        ]
+        linhas += [
+            f"| {c['id']} | {c['subtipo']} | {c['uf']} | {c['qualidade']} | {c['desfecho']} | "
+            f"{', '.join(c['alucinacoes']) or '—'} | {', '.join(c['campos_errados']) or '—'} | "
+            f"{c['subtipo_previsto'] or '—'} |"
+            for c in m["piores_casos"]
+        ]
     if m["erros_escapados"]:
-        linhas += ["", "## Erros escapados", "", "| Arquivo | Campo | Tipo |", "|---|---|---|"]
-        linhas += [f"| {e['arquivo']} | {e['campo']} | {e['tipo']} |" for e in m["erros_escapados"]]
+        linhas += ["", "## Erros escapados", "", "| Id | Campo | Tipo |", "|---|---|---|"]
+        linhas += [f"| {e['id']} | {e['campo']} | {e['tipo']} |" for e in m["erros_escapados"]]
     if m["alucinacoes"]:
         linhas += [
             "",
             "## Alucinações",
             "",
-            "| Arquivo | Campo | Crítico | Doc. aprovado |",
-            "|---|---|---|---|",
+            "| Id | Campo | Crítico | Doc. aprovado | Aprovado na medição | Campo apagado |",
+            "|---|---|---|---|---|---|",
         ]
+        sim = {True: "sim", False: "não"}
         linhas += [
-            f"| {a['arquivo']} | {a['campo']} | {'sim' if a['critico'] else 'não'} | "
-            f"{'sim' if a['aprovado'] else 'não'} |"
+            f"| {a['id']} | {a['campo']} | {sim[a['critico']]} | {sim[a['aprovado']]} | "
+            f"{sim[a['aprovado_medicao']]} | {sim[a['campo_apagado']]} |"
             for a in m["alucinacoes"]
         ]
     return "\n".join(linhas) + "\n"
