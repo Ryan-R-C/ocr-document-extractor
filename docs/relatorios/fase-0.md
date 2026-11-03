@@ -2,7 +2,7 @@
 
 Data: 2026-11-02 · branch `claude/charming-ride-4iq73l`
 
-**Situação do portão:** contrato pronto para aprovação. O gabarito real ainda não foi
+**Situação do portão:** aprovado em 2026-11-03, com as decisões [confirmar] aceitas como estão (ver `docs/decisoes.md`, item 35). O gabarito real ainda não foi
 estratificado porque ele não está no repositório nem neste ambiente. Toda a ferramenta
 (importador, partição, estratificação, campo apagado e avaliador) está pronta e testada
 sobre um gabarito sintético.

@@ -123,3 +123,12 @@ não travar a fase, mas precisa do seu aval.
     (sem significado até a Fase 1); o relatório avisa quando há stub ativo.
 34. **Batch/Flex:** o modo existe na interface (`ModoChamada`, `--modo`, preço com
     `fator_batch`/`fator_flex`); rodar fora do padrão falha com mensagem da Fase 1.
+
+## 2026-11-03 · Portão da Fase 0
+
+35. **Portão da Fase 0 aprovado** pelo responsável, com todas as decisões marcadas
+    **[confirmar]** acima aceitas como estão (itens 7, 11, 12, 13 e 28). Continuam em aberto:
+    a localização e o formato do gabarito real, o mínimo de exemplos por estrato, os nomes
+    dos campos e do enum `tipo_documento` no sistema de destino e o modelo dos contratos da
+    CTPS física. A Fase 1 começa quando chegar o prompt dela (`docs/prompts-por-fase.md`
+    não está no repositório).
