@@ -2,7 +2,8 @@
 
 Conteúdo (sob `<prefixo>/<id_processamento>/`):
 - `imagem_recebida.<ext>` e o hash em `auditoria.json`
-- `imagem_normalizada.png` e `recortes/<campo>.png`
+- `imagem_normalizada.png`, `imagem_enviada.png` (recortada, girada e redimensionada,
+  quando difere) e `recortes/<campo>.png`
 - `auditoria.json`: respostas brutas dos providers com tokens e custo, ancoragens,
   releituras, regras aplicadas (id e versão), decisão final, versao_pipeline, horários,
   id_externo, tempos por etapa e stubs ativos
@@ -64,7 +65,31 @@ def manifesto(
         }
         if r.imagem_normalizada
         else None,
+        "imagem_enviada": {
+            "sha256": r.imagem_preparada.sha256,
+            "largura": r.imagem_preparada.largura,
+            "altura": r.imagem_preparada.altura,
+        }
+        if r.imagem_preparada
+        else None,
+        "documento": {
+            "encontrado": r.documento.encontrado,
+            "contorno": r.documento.contorno,
+            "area_relativa": r.documento.area_relativa,
+            "perimetro_na_borda": r.documento.perimetro_na_borda,
+        }
+        if r.documento
+        else None,
         "qualidade": _dc(r.qualidade),
+        "captura": _dc(r.captura),
+        "classificacao": {
+            "subtipo": r.classificacao.subtipo.value,
+            "rotacao": r.classificacao.rotacao.value,
+            "modelo_documento": r.classificacao.modelo_documento,
+            "metricas": _dc(r.classificacao.metricas),
+        }
+        if r.classificacao
+        else None,
         "leitura_visual": {
             "resposta_bruta": lv.resposta_bruta,
             "metricas": _dc(lv.metricas),
@@ -131,6 +156,9 @@ def montar_pacote(
         )
     if r.imagem_normalizada:
         arquivos["imagem_normalizada.png"] = (r.imagem_normalizada.conteudo, "image/png")
+    if r.imagem_preparada and r.imagem_preparada is not r.imagem_normalizada:
+        # O que de fato foi ao provider: documento recortado, girado e redimensionado.
+        arquivos["imagem_enviada.png"] = (r.imagem_preparada.conteudo, "image/png")
     for campo, recorte in r.recortes.items():
         arquivos[f"recortes/{campo}.png"] = (recorte, "image/png")
     return arquivos
