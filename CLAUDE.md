@@ -73,7 +73,7 @@ docs/
 
 Do plano: Python, FastAPI, Pydantic, OpenCV, Pillow, PyMuPDF, PaddleOCR, validate-docbr, PostgreSQL, armazenamento compatível com S3, contêineres Docker escalando horizontalmente.
 
-Adotado na Fase 0 (ver `docs/decisoes.md`): Python 3.12, uv, pydantic-settings, SQLAlchemy 2 + Alembic, structlog, pypdfium2 (no lugar do PyMuPDF, AGPL), pillow-heif (HEIC), RustFS como S3 local (a imagem do MinIO saiu do Docker Hub), pytest, moto, ruff, mypy. opencv-python-headless entra com as métricas de qualidade (Fase 2).
+Adotado (ver `docs/decisoes.md`): Python 3.12, uv, pydantic-settings, SQLAlchemy 2 + Alembic, structlog, pypdfium2 (no lugar do PyMuPDF, AGPL), pillow-heif (HEIC), RustFS como S3 local (a imagem do MinIO saiu do Docker Hub), pytest, moto, ruff, mypy; na Fase 1, opencv-python-headless 4.x (pré-processamento) e o SDK `openai` 3.x (Responses API).
 
 ## Convenções
 
@@ -102,7 +102,8 @@ Atualize esta seção à medida que os comandos existirem.
 - `make test-integracao`: testes contra o postgres e o s3 do compose
 - `make lint`: ruff, formatação e mypy
 - `make openapi`: regenera `docs/openapi.json`; o teste de contrato falha se ele divergir
-- `make avaliar CONFIG=<arquivo> PARTICAO=ajuste`: o padrão roda o gabarito sintético com os fakes
+- `make avaliar CONFIG=<arquivo> PARTICAO=ajuste MODO=padrao|flex|batch`: o padrão roda o gabarito sintético com os fakes; rodadas OpenAI em `avaliacao/configs/openai-*.toml`
+- `make comparar RELATORIOS="<a>/relatorio.json <b>/relatorio.json"`: rodadas lado a lado (desenho, modelo, esforço)
 - `uv run gabarito {sintetico,importar-csv,particionar,validar,estratificar,apagar-campos}`: ver `docs/gabarito.md`
 - `uv run limpeza [--loop]`: job de limpeza do TTL
 

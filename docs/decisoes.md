@@ -132,3 +132,115 @@ não travar a fase, mas precisa do seu aval.
     dos campos e do enum `tipo_documento` no sistema de destino e o modelo dos contratos da
     CTPS física. A Fase 1 começa quando chegar o prompt dela (`docs/prompts-por-fase.md`
     não está no repositório).
+
+## 2026-11-03 · Fase 1
+
+### Aprovadas no plano da fase
+
+36. **Rotação de 90°/180°** é pedida ao VLM na classificação (`rotacao`: 0, 90, 180, 270 ou
+    `NAO_IDENTIFICADO`); a imagem é girada antes dos recortes e, no desenho em duas
+    etapas, antes da extração. *Descartado:* Tesseract OSD (nova dependência de sistema).
+    Efeito para a Fase 2: no desenho único, o OCR roda em paralelo sobre a imagem ainda não
+    girada; no desenho em duas etapas, o OCR já recebe a imagem de pé.
+37. **"Modelo" do documento** (`modelo_documento`, texto livre curto) fica só no pacote de
+    auditoria. O contrato não muda.
+38. **Nomes de modelo** seguem o plano: gpt-6.1-terra, gpt-6-luna, gpt-6.1-sol e
+    gpt-6-astra. Todos aparecem nos tipos do SDK `openai` 3.44.0 instalado.
+
+### Pré-processamento
+
+39. **OpenCV headless 4.x** (`>=4.12,<5`). A versão 5.0 saiu há pouco; a troca fica para
+    quando houver motivo.
+40. **Localização do documento:** filtro de mediana, Canny e fechamento morfológico, e
+    depois o maior quadrilátero convexo com área entre `DOCUMENTO_AREA_MIN` e
+    `DOCUMENTO_AREA_MAX`, com correção de perspectiva. Sem quadrilátero plausível, a
+    imagem inteira segue: não localizar nunca reprova.
+41. **Métricas de qualidade** (limiares provisórios e conservadores, todos em
+    configuração, a calibrar na partição de ajuste):
+    - conteúdo: desvio-padrão do cinza; abaixo do limiar, `NENHUM_DOCUMENTO`;
+    - nitidez: variância do Laplaciano nas bordas, em escala fixa de 1.000 px; abaixo do
+      limiar, `IMAGEM_DESFOCADA`;
+    - reflexo: maior mancha estourada (≥ 250) que seja compacta, sem texto dentro, menor
+      que metade da imagem e cercada por pixels mais escuros; acima do limiar,
+      `REFLEXO_EXCESSIVO`. Fundo branco e prints não contam;
+    - corte: o documento que sai do quadro não fecha contorno. A moldura da imagem fecha o
+      contorno, e só contam regiões que tocam um ou dois lados do quadro (três ou quatro
+      lados é fundo ou barra de status de print). Acima do limiar, `DOCUMENTO_CORTADO`.
+42. **Limite de resolução:** o documento recortado cabe em 1600 × 1000 px (respeitando a
+    orientação) e nunca é ampliado. São 1.600 patches de 32 px, a estimativa do plano.
+43. **Heurísticas de captura** (só sinalizam):
+    - print: muitos pixels idênticos ao vizinho e quase nenhum grão;
+    - cópia: saturação baixa sem ser print.
+
+    `SINALIZACAO_CAPTURA_FONTE` combina com o VLM (`vlm`, `heuristica`, `qualquer` ou
+    `ambas`). O padrão provisório é `qualquer`; o avaliador mede a precisão de cada fonte.
+44. **PNG com `compress_level=1`** em todas as imagens internas: sem perda,
+    determinístico e várias vezes mais rápido.
+
+### Leitor visual e esteira
+
+45. **Interface do leitor visual simplificada:** o provider recebe imagem, instruções e
+    schema e devolve o JSON com as métricas. A interpretação (`app/schemas/respostas.py`)
+    é comum a todos os providers. JSON fora do schema é tratado como falha do provider
+    (502), nunca como valor.
+46. **Dois desenhos atrás de `LEITOR_VISUAL_DESENHO`:**
+    - (a) `unico`: classificação e `documento` como `anyOf` por subtipo;
+    - (b) `duas_etapas`: classificação com `LEITOR_VISUAL_MODELO_CLASSIFICACAO`, recusa
+      cedo de tipo divergente (sem pagar a extração) e extração com o schema do subtipo.
+
+    O padrão fica `unico` até a comparação no gabarito real.
+47. **`LEITOR_TEXTO_PROVIDER=nenhum`** para a Fase 1. Sem segundo leitor nada ancora,
+    então nada é aprovado (invariante 1).
+48. **`versao_pipeline`** passa a incluir o desenho (e o modelo de classificação) e o
+    esforço de raciocínio. `VERSAO_SCHEMAS` sobe para 0.2.
+
+### Adaptador OpenAI
+
+49. **Conferido no SDK `openai` 3.44.0 instalado** (tipos e docstrings gerados da
+    especificação oficial):
+    - Responses API com `text.format = {type: json_schema, strict: true}`;
+    - `detail` aceita `high`, `low`, `auto` e `original`;
+    - `reasoning.effort` aceita `none`, `minimal`, `low`, `medium`, `high`, `xhigh` e `max`;
+    - `service_tier="flex"`;
+    - Batch em `/v1/responses` com janela de 24 h;
+    - `usage.output_tokens_details.reasoning_tokens` vem dentro de `output_tokens`, então
+      os tokens de raciocínio são cobrados como saída.
+50. **[confirmar] Não verificado:** a rede do ambiente bloqueia `developers.openai.com` e
+    `api.openai.com`. Ficam em configuração até a conferência:
+    - tamanho do patch e multiplicador por modelo (`MODELOS_IMAGEM`; padrão 32 px e 1,2,
+      conservador);
+    - limite de 30.000 patches;
+    - suporte a `anyOf` dentro do objeto raiz na saída estruturada estrita;
+    - preços (`PRECOS_MODELOS`, os do plano) e desconto de Batch/Flex (50%);
+    - se todos os modelos aceitam `effort="none"`.
+51. **Política de novas tentativas:**
+    - erros transitórios: 429, 5xx e falha de conexão ou timeout;
+    - até `PROVIDER_TENTATIVAS_MAX` tentativas (4), com espera exponencial de 0,5 s a 8 s
+      e jitter de 0,5 a 1,5×, tudo dentro de `PROVIDER_TIMEOUT_S`;
+    - as novas tentativas automáticas do SDK ficam desligadas (`max_retries=0`);
+    - 4xx (exceto 429) falha na hora;
+    - resposta incompleta, recusa do modelo ou JSON inválido dão 502.
+52. **`store: false`** em toda chamada: o registro de auditoria é nosso, não do provider.
+53. **Imagem acima do limite de patches** é recusada localmente, antes de enviar, com 413
+    `ARQUIVO_GRANDE_DEMAIS` (`detalhe: "limite de imagem do provider"`). Com o limite de
+    resolução da decisão 42, isso não deve acontecer.
+54. **O custo usa o preço do modelo pedido**, mesmo quando a resposta traz o nome com data
+    (`gpt-6.1-terra-2026-...`).
+
+### Avaliador
+
+55. **Modo medição:** todo campo `LEGIVEL` é tratado como aprovado direto, sem segundo
+    leitor nem regras. Dele saem o erro escapado e a alucinação usados como baseline das
+    Fases 2 e 3.
+56. **Batch:**
+    - `ColetorBatch` implementa a mesma interface e junta num lote as chamadas feitas
+      enquanto não há ociosidade; o desenho em duas etapas gera dois lotes;
+    - o estado fica em `saidas/batch/<nome>-<partição>`, com as respostas guardadas pelo
+      hash do corpo da requisição;
+    - a retomada reaproveita respostas prontas e volta a acompanhar os lotes em andamento;
+    - falhas e lotes expirados são reenviados na rodada seguinte;
+    - Batch só existe para o provider OpenAI; Flex vai por `service_tier` em cada chamada.
+57. **Relatórios usam id de caso** (os 12 primeiros caracteres do sha256 do arquivo), não o
+    nome do arquivo, que pode conter dado pessoal.
+58. **Comparação do custo com o plano:** a tabela do plano inclui escalada em 30% dos
+    documentos, e a Fase 1 não relê. O relatório mostra os dois números lado a lado.
