@@ -13,6 +13,7 @@ from app.providers.interfaces import (
     LeituraVisual,
     Localizacao,
     Localizador,
+    MetricasChamada,
 )
 from app.providers.limites import LimitadorProvider
 
@@ -21,7 +22,7 @@ class ProviderNaoImplementado(RuntimeError):
     pass
 
 
-_FASE = {"openai": "Fase 1", "paddleocr": "Fase 2", "tesseract": "Fase 2"}
+_FASE = {"paddleocr": "Fase 2", "tesseract": "Fase 4"}
 
 
 class LocalizadorPorOCR:
@@ -42,11 +43,28 @@ class LocalizadorPorOCR:
         return Localizacao()
 
 
+class LeitorTextoNenhum:
+    """Sem segundo leitor (Fase 1): nenhuma palavra. Nada ancora, então nada é aprovado."""
+
+    nome = "nenhum"
+
+    async def ler(self, imagem: Imagem) -> LeituraTexto:
+        return LeituraTexto(
+            palavras=[],
+            resposta_bruta={},
+            metricas=MetricasChamada(provider="nenhum", modelo="nenhum", etapa="leitura_texto"),
+        )
+
+
 def _visual(nome: str, settings: Settings) -> LeitorVisual:
     if nome == "fake":
         from app.providers.fake import FakeLeitorVisual
 
         return FakeLeitorVisual(settings)
+    if nome == "openai":
+        from app.providers.openai import LeitorVisualOpenAI
+
+        return LeitorVisualOpenAI(settings)
     raise ProviderNaoImplementado(f"leitor visual {nome!r}: {_FASE.get(nome, 'desconhecido')}")
 
 
@@ -55,6 +73,8 @@ def _texto(nome: str, settings: Settings) -> LeitorTexto:
         from app.providers.fake import FakeLeitorTexto
 
         return FakeLeitorTexto(settings)
+    if nome == "nenhum":
+        return LeitorTextoNenhum()
     raise ProviderNaoImplementado(f"leitor de texto {nome!r}: {_FASE.get(nome, 'desconhecido')}")
 
 
