@@ -1,9 +1,10 @@
 """Esteira de extração, independente do FastAPI.
 
-Etapas: pré-processamento → leituras em paralelo (VLM ∥ OCR) → ancoragem → localização e
-recortes → releitura dirigida → regras → decisão. O mesmo código roda na API e no avaliador.
+Etapas: pré-processamento → leitura visual (desenho único ou em duas etapas) ∥ leitura de
+texto → ancoragem → localização e recortes → releitura dirigida → regras → decisão. O mesmo
+código roda na API e no avaliador.
 
-Na Fase 0, qualidade, ancoragem, releitura e regras são stubs que nunca levam a APROVADO.
+Ancoragem, releitura e regras ainda são stubs (Fases 2 e 3) e nunca levam a APROVADO.
 """
 
 from __future__ import annotations
@@ -11,9 +12,9 @@ from __future__ import annotations
 import asyncio
 import io
 import time
-from collections.abc import Iterator
+from collections.abc import Awaitable, Callable, Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from typing import Any
 
@@ -31,6 +32,7 @@ from app.core import releitura as mod_releitura
 from app.core.ancoragem import ResultadoAncoragem
 from app.core.decisao import Decisao
 from app.core.erros import (
+    FalhaArquivoGrande,
     FalhaExtracao,
     FalhaProcessamento,
     FalhaProviderIndisponivel,
@@ -38,24 +40,31 @@ from app.core.erros import (
 )
 from app.core.releitura import ResultadoReleitura
 from app.core.versao import versao_pipeline
-from app.preprocess import decodificacao, qualidade
-from app.preprocess.decodificacao import ArquivoRecebido
+from app.preprocess import decodificacao, documento, preparacao, qualidade
+from app.preprocess.captura import IndiciosCaptura
+from app.preprocess.decodificacao import ArquivoRecebido, abrir_pil, para_imagem
+from app.preprocess.documento import DocumentoLocalizado
 from app.prompts import carregar as carregar_prompt
 from app.providers.interfaces import (
     Caixa,
     Dependencias,
     ErroProvider,
+    EtapaVisual,
     Imagem,
+    ImagemRecusadaLocalmente,
     LeituraTexto,
     LeituraVisual,
     MetricasChamada,
     ModoChamada,
-    PedidoLeituraVisual,
+    PedidoVisual,
+    RespostaVisual,
+    Rotacao,
     TempoEsgotadoProvider,
 )
 from app.regras import motor
 from app.regras.motor import ResultadoValidacao
-from app.schemas.campos import schema_leitura
+from app.schemas import respostas
+from app.schemas.campos import schema_classificacao, schema_extracao, schema_leitura
 
 
 @dataclass
@@ -69,9 +78,14 @@ class Rastro:
     versao_pipeline: str
     concluido_em: datetime | None = None
     arquivo: ArquivoRecebido | None = None
-    imagem_normalizada: Imagem | None = None
+    imagem_normalizada: Imagem | None = None  # imagem inteira, orientada (EXIF)
+    imagem_preparada: Imagem | None = None  # documento recortado, girado e redimensionado
     paginas_pdf: int | None = None
+    documento: DocumentoLocalizado | None = None
     qualidade: qualidade.AvaliacaoQualidade | None = None
+    captura: IndiciosCaptura | None = None
+    # Desenho em duas etapas: a 1ª chamada (só classificação), para auditoria e avaliação.
+    classificacao: LeituraVisual | None = None
     leitura_visual: LeituraVisual | None = None
     leitura_texto: LeituraTexto | None = None
     ancoragens: dict[str, ResultadoAncoragem] = field(default_factory=dict)
@@ -121,10 +135,14 @@ def _stubs_ativos() -> list[str]:
     return stubs
 
 
-def _recortar(imagem: Imagem, caixa: Caixa, margem: float = 0.15) -> bytes:
-    from PIL import Image
+def _girar(imagem: Imagem, rotacao: Rotacao) -> Imagem:
+    if rotacao in (Rotacao.GRAUS_0, Rotacao.NAO_IDENTIFICADO):
+        return imagem
+    return para_imagem(documento.girar(abrir_pil(imagem), int(rotacao.value)), imagem.sha256_origem)
 
-    pil = Image.open(io.BytesIO(imagem.conteudo))
+
+def _recortar(imagem: Imagem, caixa: Caixa, margem: float = 0.15) -> bytes:
+    pil = abrir_pil(imagem)
     mx = max(8, int(caixa.largura * margem))
     my = max(8, int(caixa.altura * margem))
     area = (
@@ -151,7 +169,7 @@ class Esteira:
         self, id_processamento: str, requisicao: RequisicaoExtracao
     ) -> ResultadoPipeline:
         """Entrada da API: decodifica o base64 e segue a esteira."""
-        rastro = self._novo_rastro(
+        rastro = self.novo_rastro(
             id_processamento, requisicao.tipo_documento, requisicao.id_externo
         )
         try:
@@ -163,11 +181,6 @@ class Esteira:
         return await self.processar_arquivo(rastro, arquivo)
 
     def novo_rastro(
-        self, id_processamento: str, tipo: TipoDocumento, id_externo: str | None
-    ) -> Rastro:
-        return self._novo_rastro(id_processamento, tipo, id_externo)
-
-    def _novo_rastro(
         self, id_processamento: str, tipo: TipoDocumento, id_externo: str | None
     ) -> Rastro:
         return Rastro(
@@ -203,39 +216,37 @@ class Esteira:
     ) -> RespostaExtracao:
         settings = self.settings
 
-        # 1. Pré-processamento (CPU)
+        # 1. Pré-processamento (CPU): orientação, recorte, qualidade, captura, resolução.
         with rastro.cronometro("preprocessamento"):
-            normalizada = await asyncio.to_thread(decodificacao.normalizar, arquivo, settings)
-            imagem = normalizada.imagem
-            rastro.imagem_normalizada = imagem
-            rastro.paginas_pdf = normalizada.paginas_pdf
-            rastro.qualidade = qualidade.avaliar(imagem)
+            preparada = await asyncio.to_thread(preparacao.preparar, arquivo, settings)
+        rastro.imagem_normalizada = preparada.normalizada
+        rastro.imagem_preparada = preparada.imagem
+        rastro.paginas_pdf = preparada.paginas_pdf
+        rastro.documento = preparada.documento
+        rastro.qualidade = preparada.qualidade
+        rastro.captura = preparada.captura
         if rastro.qualidade.reprovacoes:
             raise FalhaExtracao(rastro.qualidade.reprovacoes)
 
         # 2 e 3. Leitura visual ∥ leitura de texto
-        pedido = PedidoLeituraVisual(
-            imagem=imagem,
-            tipo_documento=rastro.tipo_documento,
-            schema=schema_leitura(rastro.tipo_documento),
-            prompt=carregar_prompt("leitura_visual"),
-            modelo=settings.leitor_visual_modelo,
-            modo=modo,
-        )
-        with rastro.cronometro("leituras"):
-            leitura_visual, leitura_texto = await self._ler_em_paralelo(rastro, pedido, imagem)
+        if settings.leitor_visual_desenho == "duas_etapas":
+            leitura_visual, leitura_texto = await self._ler_em_duas_etapas(
+                rastro, preparada.imagem, modo
+            )
+        else:
+            leitura_visual, leitura_texto = await self._ler_em_uma_etapa(
+                rastro, preparada.imagem, modo
+            )
+        imagem = rastro.imagem_preparada
+        assert imagem is not None
         rastro.leitura_visual = leitura_visual
         rastro.leitura_texto = leitura_texto
-        rastro.chamadas.extend([leitura_visual.metricas, leitura_texto.metricas])
         rastro.versao_pipeline = versao_pipeline(
             settings,
             provider_visual=leitura_visual.metricas.provider,
             modelo_visual=leitura_visual.metricas.modelo,
             provider_texto=leitura_texto.metricas.provider,
         )
-
-        # Classificação dentro do tipo declarado
-        mod_decisao.verificar_classificacao(rastro.tipo_documento, leitura_visual)
         subtipo = leitura_visual.subtipo
 
         # 4. Ancoragem
@@ -271,6 +282,7 @@ class Esteira:
             rastro.validacao = motor.validar(
                 subtipo, {n: p.entrada_regra() for n, p in preparados.items()}
             )
+        captura = rastro.captura
         with rastro.cronometro("decisao"):
             rastro.decisao = mod_decisao.decidir(
                 leitura_visual,
@@ -279,6 +291,12 @@ class Esteira:
                 rastro.releituras,
                 rastro.validacao,
                 aprovar_nao_verificavel=settings.aprovar_critico_nao_verificavel,
+                sinalizacoes_captura=mod_decisao.sinalizacoes_de_captura(
+                    leitura_visual,
+                    captura.copia_reprografica if captura else False,
+                    captura.print_de_tela if captura else False,
+                    settings.sinalizacao_captura_fonte,
+                ),
             )
 
         return RespostaExtracao(
@@ -290,12 +308,131 @@ class Esteira:
             versao_pipeline=rastro.versao_pipeline,
         )
 
-    async def _ler_em_paralelo(
-        self, rastro: Rastro, pedido: PedidoLeituraVisual, imagem: Imagem
+    def _pedido(
+        self,
+        rastro: Rastro,
+        etapa: EtapaVisual,
+        imagem: Imagem,
+        modo: ModoChamada,
+        leitura: LeituraVisual | None = None,
+    ) -> PedidoVisual:
+        settings, tipo = self.settings, rastro.tipo_documento
+        if etapa is EtapaVisual.LEITURA:
+            schema, prompt, modelo = (
+                schema_leitura(tipo),
+                "leitura_visual",
+                settings.leitor_visual_modelo,
+            )
+        elif etapa is EtapaVisual.CLASSIFICACAO:
+            schema, prompt = schema_classificacao(tipo), "classificacao"
+            modelo = settings.leitor_visual_modelo_classificacao
+        else:
+            assert leitura is not None
+            schema, prompt = schema_extracao(leitura.subtipo), "extracao"
+            modelo = settings.leitor_visual_modelo
+        return PedidoVisual(
+            etapa=etapa,
+            imagem=imagem,
+            tipo_documento=tipo,
+            schema=schema,
+            nome_schema=f"{etapa.value}_{tipo.value.lower()}",
+            prompt=carregar_prompt(prompt),
+            modelo=modelo,
+            modo=modo,
+            subtipo=leitura.subtipo if leitura else None,
+        )
+
+    async def _ler_em_uma_etapa(
+        self, rastro: Rastro, imagem: Imagem, modo: ModoChamada
     ) -> tuple[LeituraVisual, LeituraTexto]:
+        """Desenho (a): uma chamada com classificação e os campos de todos os subtipos."""
+        pedido = self._pedido(rastro, EtapaVisual.LEITURA, imagem, modo)
+        with rastro.cronometro("leituras"):
+            resposta, texto = await self._em_paralelo(
+                rastro, ("leitura_visual", self.deps.leitor_visual.ler(pedido)), imagem
+            )
+        rastro.chamadas.extend([resposta.metricas, texto.metricas])
+        leitura = self._interpretar(
+            lambda: respostas.interpretar_leitura(
+                resposta.dados, resposta.resposta_bruta, resposta.metricas
+            )
+        )
+        mod_decisao.verificar_classificacao(rastro.tipo_documento, leitura)
+        rastro.imagem_preparada = await asyncio.to_thread(_girar, imagem, leitura.rotacao)
+        return leitura, texto
+
+    async def _ler_em_duas_etapas(
+        self, rastro: Rastro, imagem: Imagem, modo: ModoChamada
+    ) -> tuple[LeituraVisual, LeituraTexto]:
+        """Desenho (b): classificação barata; recusa cedo se o tipo não confere; gira a
+        imagem; extração com o schema do subtipo em paralelo com o OCR na imagem de pé."""
+        pedido = self._pedido(rastro, EtapaVisual.CLASSIFICACAO, imagem, modo)
+        with rastro.cronometro("classificacao"):
+            resposta = await self._chamar(self.deps.leitor_visual.ler(pedido))
+        rastro.chamadas.append(resposta.metricas)
+        classificacao = self._interpretar(
+            lambda: respostas.interpretar_classificacao(
+                resposta.dados, resposta.resposta_bruta, resposta.metricas
+            )
+        )
+        rastro.classificacao = classificacao
+        mod_decisao.verificar_classificacao(rastro.tipo_documento, classificacao)
+
+        de_pe = await asyncio.to_thread(_girar, imagem, classificacao.rotacao)
+        rastro.imagem_preparada = de_pe
+        pedido = self._pedido(rastro, EtapaVisual.EXTRACAO, de_pe, modo, classificacao)
+        with rastro.cronometro("leituras"):
+            extracao, texto = await self._em_paralelo(
+                rastro, ("extracao", self.deps.leitor_visual.ler(pedido)), de_pe
+            )
+        rastro.chamadas.extend([extracao.metricas, texto.metricas])
+        campos = self._interpretar(
+            lambda: respostas.interpretar_campos(
+                extracao.dados.get("campos", {}), classificacao.subtipo
+            )
+        )
+        leitura = replace(
+            classificacao,
+            campos=campos,
+            resposta_bruta={
+                "classificacao": resposta.resposta_bruta,
+                "extracao": extracao.resposta_bruta,
+            },
+            metricas=extracao.metricas,
+        )
+        return leitura, texto
+
+    @staticmethod
+    def _interpretar[T](funcao: Callable[[], T]) -> T:
+        try:
+            return funcao()
+        except respostas.RespostaInvalida:
+            raise FalhaProviderIndisponivel.de(
+                MotivoErro.PROVIDER_INDISPONIVEL, detalhe="resposta fora do schema"
+            ) from None
+
+    @staticmethod
+    async def _chamar[T](coro: Awaitable[T]) -> T:
+        try:
+            return await coro
+        except ImagemRecusadaLocalmente:
+            raise FalhaArquivoGrande.de(
+                MotivoErro.ARQUIVO_GRANDE_DEMAIS, detalhe="limite de imagem do provider"
+            ) from None
+        except TempoEsgotadoProvider:
+            raise FalhaTempoEsgotado.de(MotivoErro.TEMPO_ESGOTADO) from None
+        except ErroProvider:
+            raise FalhaProviderIndisponivel.de(MotivoErro.PROVIDER_INDISPONIVEL) from None
+
+    async def _em_paralelo(
+        self,
+        rastro: Rastro,
+        visual: tuple[str, Awaitable[RespostaVisual]],
+        imagem: Imagem,
+    ) -> tuple[RespostaVisual, LeituraTexto]:
         tempos: dict[str, float] = {}
 
-        async def cronometrar(etapa: str, coro: Any) -> Any:
+        async def cronometrar(etapa: str, coro: Awaitable[Any]) -> Any:
             inicio = time.perf_counter()
             try:
                 return await coro
@@ -304,13 +441,15 @@ class Esteira:
 
         try:
             async with asyncio.TaskGroup() as grupo:
-                visual = grupo.create_task(
-                    cronometrar("leitura_visual", self.deps.leitor_visual.ler(pedido))
-                )
-                texto = grupo.create_task(
+                tarefa_visual = grupo.create_task(cronometrar(visual[0], visual[1]))
+                tarefa_texto = grupo.create_task(
                     cronometrar("leitura_texto", self.deps.leitor_texto.ler(imagem))
                 )
         except ExceptionGroup as grupo_erros:
+            if grupo_erros.subgroup(ImagemRecusadaLocalmente) is not None:
+                raise FalhaArquivoGrande.de(
+                    MotivoErro.ARQUIVO_GRANDE_DEMAIS, detalhe="limite de imagem do provider"
+                ) from None
             if grupo_erros.subgroup(TempoEsgotadoProvider) is not None:
                 raise FalhaTempoEsgotado.de(MotivoErro.TEMPO_ESGOTADO) from None
             if grupo_erros.subgroup(ErroProvider) is not None:
@@ -318,4 +457,4 @@ class Esteira:
             raise
         finally:
             rastro.tempos_ms.update(tempos)
-        return visual.result(), texto.result()
+        return tarefa_visual.result(), tarefa_texto.result()

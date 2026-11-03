@@ -17,10 +17,10 @@ from app.api.contrato import (
     Subtipo,
     TipoDocumento,
 )
-from app.providers.interfaces import QualidadeCaptura
+from app.providers.interfaces import QualidadeCaptura, Rotacao
 from app.schemas.normalizacao import TipoValor, normalizar
 
-VERSAO_SCHEMAS = "0.1"
+VERSAO_SCHEMAS = "0.2"
 
 
 class Escrita(StrEnum):
@@ -214,41 +214,47 @@ def schema_campos(subtipo: Subtipo) -> dict[str, Any]:
     }
 
 
-def schema_leitura(tipo: TipoDocumento) -> dict[str, Any]:
-    """Schema de uma leitura visual: classificação + campos do subtipo (anyOf por subtipo)."""
-    variantes: list[dict[str, Any]] = []
-    for subtipo in (*SUBTIPOS_POR_TIPO[tipo], Subtipo.NAO_IDENTIFICADO):
-        variantes.append(
-            {
-                "type": "object",
-                "additionalProperties": False,
-                "required": ["subtipo", "campos"],
-                "properties": {
-                    "subtipo": _enum([subtipo.value]),
-                    "campos": schema_campos(subtipo),
-                },
-            }
-        )
+def _classificacao(tipo: TipoDocumento) -> dict[str, dict[str, Any]]:
+    """Propriedades de classificação comuns aos dois desenhos. `modelo_documento` é texto
+    livre curto (descrição do layout) e fica só no pacote de auditoria."""
+    return {
+        "tipo_documento_detectado": _enum([t.value for t in TipoDocumento] + ["NAO_IDENTIFICADO"]),
+        "uf": _enum([u.value for u in UF]),
+        "lado": _enum([lado.value for lado in Lado]),
+        "qualidade_captura": _enum([q.value for q in QualidadeCaptura]),
+        "rotacao": _enum([r.value for r in Rotacao]),
+        "modelo_documento": {"type": "string"},
+    }
+
+
+def _objeto(propriedades: dict[str, Any]) -> dict[str, Any]:
     return {
         "type": "object",
         "additionalProperties": False,
-        "required": [
-            "tipo_documento_detectado",
-            "uf",
-            "lado",
-            "qualidade_captura",
-            "documento",
-        ],
-        "properties": {
-            "tipo_documento_detectado": _enum(
-                [t.value for t in TipoDocumento] + ["NAO_IDENTIFICADO"]
-            ),
-            "uf": _enum([u.value for u in UF]),
-            "lado": _enum([lado.value for lado in Lado]),
-            "qualidade_captura": _enum([q.value for q in QualidadeCaptura]),
-            "documento": {"anyOf": variantes},
-        },
+        "required": list(propriedades),
+        "properties": propriedades,
     }
+
+
+def schema_leitura(tipo: TipoDocumento) -> dict[str, Any]:
+    """Desenho único: classificação + campos de cada subtipo do tipo declarado, como
+    alternativas (`anyOf`) discriminadas pelo subtipo."""
+    variantes = [
+        _objeto({"subtipo": _enum([subtipo.value]), "campos": schema_campos(subtipo)})
+        for subtipo in (*SUBTIPOS_POR_TIPO[tipo], Subtipo.NAO_IDENTIFICADO)
+    ]
+    return _objeto({**_classificacao(tipo), "documento": {"anyOf": variantes}})
+
+
+def schema_classificacao(tipo: TipoDocumento) -> dict[str, Any]:
+    """Desenho em duas etapas, 1ª chamada: só a classificação, sem campos."""
+    subtipos = [s.value for s in SUBTIPOS_POR_TIPO[tipo]] + [Subtipo.NAO_IDENTIFICADO.value]
+    return _objeto({**_classificacao(tipo), "subtipo": _enum(subtipos)})
+
+
+def schema_extracao(subtipo: Subtipo) -> dict[str, Any]:
+    """Desenho em duas etapas, 2ª chamada: só os campos do subtipo já classificado."""
+    return _objeto({"campos": schema_campos(subtipo)})
 
 
 def schema_releitura() -> dict[str, Any]:

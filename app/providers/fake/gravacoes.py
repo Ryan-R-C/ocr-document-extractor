@@ -13,7 +13,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.api.contrato import UF, Lado, StatusLeitura, Subtipo, TipoDocumento
-from app.providers.interfaces import QualidadeCaptura
+from app.providers.interfaces import QualidadeCaptura, Rotacao
 
 Falha = Literal["indisponivel", "tempo"]
 
@@ -35,10 +35,16 @@ class LeituraVisualGravada(_Base):
     lado: Lado = Lado.NAO_IDENTIFICADO
     qualidade_captura: QualidadeCaptura = QualidadeCaptura.FOTO
     campos: dict[str, CampoGravado] = Field(default_factory=dict)
+    rotacao: Rotacao = Rotacao.GRAUS_0
+    modelo_documento: str = ""
     modelo: str | None = None
     tokens_entrada: int = 0
     tokens_saida: int = 0
     latencia_ms: float = 0.0
+    # Desenho em duas etapas: custo da chamada de classificação (a extração usa os acima).
+    classificacao_tokens_entrada: int = 0
+    classificacao_tokens_saida: int = 0
+    classificacao_latencia_ms: float = 0.0
 
 
 class PalavraGravada(_Base):

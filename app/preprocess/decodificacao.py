@@ -154,6 +154,11 @@ def _abrir_imagem(arquivo: ArquivoRecebido, settings: Settings) -> Image.Image:
 
 def normalizar(arquivo: ArquivoRecebido, settings: Settings) -> ImagemNormalizada:
     """Converte qualquer formato aceito em PNG RGB, com orientação EXIF aplicada e lado limitado."""
+    imagem, paginas = normalizar_pil(arquivo, settings)
+    return ImagemNormalizada(imagem=para_imagem(imagem, arquivo.sha256), paginas_pdf=paginas)
+
+
+def normalizar_pil(arquivo: ArquivoRecebido, settings: Settings) -> tuple[Image.Image, int | None]:
     paginas: int | None = None
     if arquivo.formato is Formato.PDF:
         imagem, paginas = _abrir_pdf(arquivo, settings)
@@ -164,7 +169,7 @@ def normalizar(arquivo: ArquivoRecebido, settings: Settings) -> ImagemNormalizad
     imagem.thumbnail(
         (settings.imagem_lado_max_px, settings.imagem_lado_max_px), Image.Resampling.LANCZOS
     )
-    return ImagemNormalizada(imagem=para_imagem(imagem, arquivo.sha256), paginas_pdf=paginas)
+    return imagem, paginas
 
 
 def para_imagem(imagem: Image.Image, sha256_origem: str) -> Imagem:

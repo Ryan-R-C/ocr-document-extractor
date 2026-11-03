@@ -8,19 +8,19 @@ from pathlib import Path
 
 import pytest
 
-from app.api.contrato import UF, Lado, StatusLeitura, Subtipo, TipoDocumento
+from app.api.contrato import Subtipo, TipoDocumento
 from app.config import LimiteProvider, Settings
 from app.providers.composicao import LeitorVisualComposto
 from app.providers.custo import PrecoDesconhecido, calcular_custo
 from app.providers.fabrica import ProviderNaoImplementado, criar_dependencias
 from app.providers.interfaces import (
     ErroProvider,
+    EtapaVisual,
     Imagem,
-    LeituraVisual,
     MetricasChamada,
     ModoChamada,
-    PedidoLeituraVisual,
-    QualidadeCaptura,
+    PedidoVisual,
+    RespostaVisual,
     TempoEsgotadoProvider,
 )
 from app.providers.limites import BaldeTokens, LimitadorProvider
@@ -28,7 +28,7 @@ from app.providers.limites import BaldeTokens, LimitadorProvider
 RAIZ = Path(__file__).resolve().parents[1]
 
 IMAGEM = Imagem(b"", "image/png", 1, 1, "a", "a")
-PEDIDO = PedidoLeituraVisual(IMAGEM, TipoDocumento.CPF, {}, "", "m")
+PEDIDO = PedidoVisual(EtapaVisual.LEITURA, IMAGEM, TipoDocumento.CPF, {}, "teste", "", "m")
 
 
 class Leitor:
@@ -44,19 +44,9 @@ class Leitor:
             raise ErroProvider("x")
         if self.comportamento == "lento":
             await asyncio.sleep(5)
-        return LeituraVisual(
-            Subtipo.CPF_CARTAO,
-            UF.SP,
-            Lado.FRENTE,
-            None,
-            QualidadeCaptura.FOTO,
-            {},
-            {},
-            MetricasChamada(self.nome, "m", "leitura_visual", tokens_entrada=self.tokens),
+        return RespostaVisual(
+            {}, {}, MetricasChamada(self.nome, "m", "leitura_visual", tokens_entrada=self.tokens)
         )
-
-    async def reler(self, pedido):  # pragma: no cover - não usado aqui
-        raise NotImplementedError
 
 
 @pytest.mark.anyio
@@ -133,8 +123,8 @@ def test_custo_por_modelo_e_modo() -> None:
 
 
 def test_provider_nao_implementado_falha_cedo() -> None:
-    with pytest.raises(ProviderNaoImplementado, match="Fase 1"):
-        criar_dependencias(Settings(_env_file=None))
+    with pytest.raises(ProviderNaoImplementado, match="Fase 2"):
+        criar_dependencias(Settings(_env_file=None, leitor_visual_provider="fake"))
 
 
 def test_somente_providers_importam_sdk() -> None:
@@ -157,10 +147,24 @@ def test_nucleo_nao_conhece_providers_concretos() -> None:
             assert "app.providers.fabrica" not in texto, arquivo
 
 
-def test_campo_gravado_desconhecido_nao_gera_valor(settings) -> None:
+@pytest.mark.parametrize("etapa", list(EtapaVisual))
+def test_fake_sem_gravacao_nunca_gera_valor(settings, etapa) -> None:
     from app.providers.fake import FakeLeitorVisual
+    from app.schemas.campos import schema_extracao
 
-    leitura = asyncio.run(FakeLeitorVisual(settings).ler(PEDIDO))
-    assert leitura.subtipo is Subtipo.NAO_IDENTIFICADO
-    assert leitura.campos == {}
-    assert StatusLeitura.LEGIVEL not in {c.status for c in leitura.campos.values()}
+    pedido = PedidoVisual(
+        etapa,
+        IMAGEM,
+        TipoDocumento.CPF,
+        schema_extracao(Subtipo.CPF_CARTAO),
+        "teste",
+        "",
+        "m",
+        subtipo=Subtipo.CPF_CARTAO,
+        campo="cpf",
+    )
+    resposta = asyncio.run(FakeLeitorVisual(settings).ler(pedido))
+    texto = str(resposta.dados)
+    assert "LEGIVEL'" not in texto.replace("ILEGIVEL'", "")
+    if etapa in (EtapaVisual.LEITURA, EtapaVisual.CLASSIFICACAO):
+        assert "NAO_IDENTIFICADO" in texto

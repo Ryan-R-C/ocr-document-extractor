@@ -40,6 +40,13 @@ def versao_pipeline(
         f"{provider_visual or settings.leitor_visual_provider}:"
         f"{modelo_visual or settings.leitor_visual_modelo}",
         f"escalada:{settings.leitor_visual_modelo_escalada}",
+        f"desenho:{settings.leitor_visual_desenho}"
+        + (
+            f"/{settings.leitor_visual_modelo_classificacao}"
+            if settings.leitor_visual_desenho == "duas_etapas"
+            else ""
+        ),
+        f"raciocinio:{settings.leitor_visual_esforco_raciocinio or 'padrao'}",
         f"ocr:{provider_texto or settings.leitor_texto_provider}",
         f"prompt:{hash_prompts()}",
         f"schemas:{VERSAO_SCHEMAS}",

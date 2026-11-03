@@ -176,7 +176,11 @@ def _desenhar(
             caixa_campo[3] - caixa_campo[1],
         )
 
-    if qualidade == "xerox":
+    if qualidade == "foto":
+        # Grão e leve desfoque de câmera, para não parecer um arquivo digital limpo.
+        ruido = Image.effect_noise(imagem.size, 18).convert("RGB")
+        imagem = Image.blend(imagem, ruido, 0.06).filter(ImageFilter.GaussianBlur(0.6))
+    elif qualidade == "xerox":
         cinza = imagem.convert("L").filter(ImageFilter.GaussianBlur(0.8))
         ruido = Image.effect_noise(cinza.size, 25)
         imagem = Image.blend(cinza, ruido, 0.12).convert("RGB")

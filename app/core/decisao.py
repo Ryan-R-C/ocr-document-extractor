@@ -121,6 +121,7 @@ def decidir(
     releituras: dict[str, ResultadoReleitura],
     validacao: ResultadoValidacao,
     aprovar_nao_verificavel: bool,
+    sinalizacoes_captura: list[Sinalizacao] | None = None,
 ) -> Decisao:
     falha = _falha_sem_criticos(preparados)
     if falha is not None:
@@ -178,17 +179,44 @@ def decidir(
     return Decisao(
         status=StatusDocumento.APROVADO if aprovado else StatusDocumento.REVISAO,
         campos=campos,
-        sinalizacoes=_sinalizacoes(leitura, validacao),
+        sinalizacoes=_sinalizacoes(leitura, validacao, sinalizacoes_captura),
         bloqueios=bloqueios,
     )
 
 
-def _sinalizacoes(leitura: LeituraVisual, validacao: ResultadoValidacao) -> list[Sinalizacao]:
-    sinais: list[Sinalizacao] = []
-    if leitura.qualidade_captura is QualidadeCaptura.COPIA_REPROGRAFICA:
+def sinalizacoes_de_captura(
+    leitura: LeituraVisual, copia_heuristica: bool, print_heuristica: bool, fonte: str
+) -> list[Sinalizacao]:
+    """Combina a heurística em CPU com a classificação do VLM conforme a configuração:
+    `vlm`, `heuristica`, `qualquer` (uma das duas) ou `ambas` (as duas concordam)."""
+    vlm_copia = leitura.qualidade_captura is QualidadeCaptura.COPIA_REPROGRAFICA
+    vlm_print = leitura.qualidade_captura is QualidadeCaptura.PRINT_DE_TELA
+
+    def combinar(vlm: bool, heuristica: bool) -> bool:
+        return {
+            "vlm": vlm,
+            "heuristica": heuristica,
+            "qualquer": vlm or heuristica,
+            "ambas": vlm and heuristica,
+        }[fonte]
+
+    sinais = []
+    if combinar(vlm_copia, copia_heuristica):
         sinais.append(Sinalizacao.COPIA_REPROGRAFICA)
-    if leitura.qualidade_captura is QualidadeCaptura.PRINT_DE_TELA:
+    if combinar(vlm_print, print_heuristica):
         sinais.append(Sinalizacao.PRINT_DE_TELA)
+    return sinais
+
+
+def _sinalizacoes(
+    leitura: LeituraVisual,
+    validacao: ResultadoValidacao,
+    captura: list[Sinalizacao] | None,
+) -> list[Sinalizacao]:
+    """Sinalizações de política: informam e nunca alteram o status."""
+    if captura is None:
+        captura = sinalizacoes_de_captura(leitura, False, False, "vlm")
+    sinais: list[Sinalizacao] = list(captura)
     if leitura.subtipo is Subtipo.RG_ANTIGO:
         sinais.append(Sinalizacao.RG_ANTIGO)
     sinais.extend(validacao.sinalizacoes)

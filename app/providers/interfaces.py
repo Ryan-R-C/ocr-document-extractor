@@ -37,6 +37,10 @@ class TempoEsgotadoProvider(ErroProvider):
     """Provider não respondeu dentro do tempo."""
 
 
+class ImagemRecusadaLocalmente(ValueError):
+    """O adaptador recusou a imagem antes de enviar (acima do limite do provider)."""
+
+
 @dataclass(frozen=True)
 class MetricasChamada:
     provider: str
@@ -50,6 +54,13 @@ class MetricasChamada:
     modo: ModoChamada = ModoChamada.PADRAO
     sucesso: bool = True
     erro: str | None = None
+    # Detalhes para comparar com o plano: tokens de raciocínio (já incluídos na saída e
+    # cobrados como saída), tokens de entrada vindos de cache e a estimativa local dos
+    # tokens de imagem (patches × multiplicador).
+    tokens_raciocinio: int = 0
+    tokens_cache: int = 0
+    tokens_imagem_estimados: int = 0
+    tentativas: int = 1
 
 
 @dataclass(frozen=True)
@@ -82,18 +93,54 @@ class CampoLido:
     texto_literal: str
 
 
+class Rotacao(StrEnum):
+    """Quanto girar no sentido horário para deixar o documento de pé."""
+
+    GRAUS_0 = "0"
+    GRAUS_90 = "90"
+    GRAUS_180 = "180"
+    GRAUS_270 = "270"
+    NAO_IDENTIFICADO = "NAO_IDENTIFICADO"
+
+
+class EtapaVisual(StrEnum):
+    LEITURA = "leitura_visual"  # desenho único: classificação + campos
+    CLASSIFICACAO = "classificacao"  # desenho em duas etapas, 1ª chamada
+    EXTRACAO = "extracao"  # desenho em duas etapas, 2ª chamada (schema do subtipo)
+    RELEITURA = "releitura"  # recorte de um campo, modelo de escalada
+
+
 @dataclass(frozen=True)
-class PedidoLeituraVisual:
+class PedidoVisual:
+    """Uma chamada ao leitor visual: imagem + instruções + schema estrito.
+
+    O provider não interpreta o conteúdo: devolve o JSON no schema pedido. A interpretação
+    é código do núcleo (`app/schemas/respostas.py`), igual para todo provider.
+    """
+
+    etapa: EtapaVisual
     imagem: Imagem
     tipo_documento: TipoDocumento
     schema: dict[str, Any]
+    nome_schema: str
     prompt: str
     modelo: str
     modo: ModoChamada = ModoChamada.PADRAO
+    subtipo: Subtipo | None = None  # extração e releitura
+    campo: str | None = None  # releitura
+
+
+@dataclass(frozen=True)
+class RespostaVisual:
+    dados: dict[str, Any]
+    resposta_bruta: dict[str, Any]
+    metricas: MetricasChamada
 
 
 @dataclass(frozen=True)
 class LeituraVisual:
+    """Leitura visual já interpretada pelo núcleo (de uma ou de duas chamadas)."""
+
     subtipo: Subtipo
     uf: UF
     lado: Lado
@@ -102,19 +149,8 @@ class LeituraVisual:
     campos: dict[str, CampoLido]
     resposta_bruta: dict[str, Any]
     metricas: MetricasChamada
-
-
-@dataclass(frozen=True)
-class PedidoReleitura:
-    """Releitura dirigida: recorte do campo, sem valor esperado nem leituras anteriores."""
-
-    recorte: Imagem
-    campo: str
-    rotulos: tuple[str, ...]
-    schema: dict[str, Any]
-    prompt: str
-    modelo: str
-    modo: ModoChamada = ModoChamada.PADRAO
+    rotacao: Rotacao = Rotacao.GRAUS_0
+    modelo_documento: str = ""
 
 
 @dataclass(frozen=True)
@@ -128,9 +164,7 @@ class Releitura:
 class LeitorVisual(Protocol):
     nome: str
 
-    async def ler(self, pedido: PedidoLeituraVisual) -> LeituraVisual: ...
-
-    async def reler(self, pedido: PedidoReleitura) -> Releitura: ...
+    async def ler(self, pedido: PedidoVisual) -> RespostaVisual: ...
 
 
 # --- Leitor de texto (OCR clássico) ------------------------------------------------------------

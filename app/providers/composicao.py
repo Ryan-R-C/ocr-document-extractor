@@ -16,17 +16,15 @@ from app.providers.interfaces import (
     LeitorTexto,
     LeitorVisual,
     LeituraTexto,
-    LeituraVisual,
     MetricasChamada,
-    PedidoLeituraVisual,
-    PedidoReleitura,
-    Releitura,
+    PedidoVisual,
+    RespostaVisual,
     TempoEsgotadoProvider,
 )
 from app.providers.limites import LimitadorProvider
 
 
-async def _chamar[R: (LeituraVisual, LeituraTexto, Releitura)](
+async def _chamar[R: (RespostaVisual, LeituraTexto)](
     chamada: Callable[[], Awaitable[R]],
     timeout_s: float,
     limitador: LimitadorProvider | None,
@@ -46,7 +44,7 @@ async def _chamar[R: (LeituraVisual, LeituraTexto, Releitura)](
         raise TempoEsgotadoProvider("tempo limite") from None
 
 
-async def _com_fallback[R: (LeituraVisual, LeituraTexto, Releitura)](
+async def _com_fallback[R: (RespostaVisual, LeituraTexto)](
     principal: Callable[[], Awaitable[R]],
     fallback: Callable[[], Awaitable[R]] | None,
 ) -> R:
@@ -78,38 +76,20 @@ class LeitorVisualComposto:
         self.limitadores = limitadores
         self.nome = principal.nome
 
-    async def ler(self, pedido: PedidoLeituraVisual) -> LeituraVisual:
+    async def ler(self, pedido: PedidoVisual) -> RespostaVisual:
         fb = self.fallback
 
-        async def principal() -> LeituraVisual:
+        async def principal() -> RespostaVisual:
             return await _chamar(
                 lambda: self.principal.ler(pedido),
                 self.timeout_s,
                 self.limitadores.get(self.principal.nome),
             )
 
-        async def reserva() -> LeituraVisual:
+        async def reserva() -> RespostaVisual:
             assert fb is not None
             return await _chamar(
                 lambda: fb.ler(pedido), self.timeout_s, self.limitadores.get(fb.nome)
-            )
-
-        return await _com_fallback(principal, reserva if fb else None)
-
-    async def reler(self, pedido: PedidoReleitura) -> Releitura:
-        fb = self.fallback
-
-        async def principal() -> Releitura:
-            return await _chamar(
-                lambda: self.principal.reler(pedido),
-                self.timeout_s,
-                self.limitadores.get(self.principal.nome),
-            )
-
-        async def reserva() -> Releitura:
-            assert fb is not None
-            return await _chamar(
-                lambda: fb.reler(pedido), self.timeout_s, self.limitadores.get(fb.nome)
             )
 
         return await _com_fallback(principal, reserva if fb else None)

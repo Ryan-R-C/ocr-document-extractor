@@ -17,6 +17,9 @@ dependencies = [
     "pillow>=13,<14",
     "pillow-heif>=1.8,<2",
     "pypdfium2>=5.14,<6",
+    "opencv-python-headless>=4.12,<5",
+    "openai>=3.44,<4",
+    "numpy>=2",
 ]
 
 [project.scripts]

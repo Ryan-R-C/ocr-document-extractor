@@ -214,7 +214,7 @@ async def test_stubs_nunca_aprovam(settings, gravar, aprovar_nao_verificavel) ->
         )
         assert resultado.resposta is not None
         assert resultado.resposta.status is StatusDocumento.REVISAO
-        assert set(resultado.rastro.stubs) == {"qualidade", "ancoragem", "releitura", "regras"}
+        assert set(resultado.rastro.stubs) == {"ancoragem", "releitura", "regras"}
 
 
 @pytest.mark.anyio
@@ -295,3 +295,119 @@ async def test_pdf_e_orientacao_exif(settings, gravar) -> None:
     assert normalizada is not None
     assert (normalizada.largura, normalizada.altura) == (100, 300)
     assert Image.open(io.BytesIO(normalizada.conteudo)).format == "PNG"
+
+
+# --- Desenhos da leitura visual, rotação e sinalizações ---------------------------------------
+
+
+def _req(conteudo: bytes, tipo: TipoDocumento = TipoDocumento.CPF) -> RequisicaoExtracao:
+    return RequisicaoExtracao(tipo_documento=tipo, imagem_base64=b64(conteudo))
+
+
+@pytest.mark.anyio
+async def test_desenho_em_duas_etapas(settings, gravar) -> None:
+    conteudo = imagem_png(120)
+    gravacao = gravacao_cpf(cpf_sintetico())
+    assert gravacao.leitura_visual is not None
+    lv = gravacao.leitura_visual.model_copy(
+        update={"classificacao_tokens_entrada": 1500, "classificacao_tokens_saida": 60}
+    )
+    gravar(conteudo, gravacao.model_copy(update={"leitura_visual": lv}))
+    config = settings.model_copy(update={"leitor_visual_desenho": "duas_etapas"})
+    resultado = await criar_esteira(config).processar("id", _req(conteudo))
+
+    assert resultado.resposta is not None
+    assert resultado.resposta.campos["cpf"].valor_normalizado is not None
+    etapas = [c.etapa for c in resultado.rastro.chamadas]
+    assert etapas[:2] == ["classificacao", "extracao"]
+    classificacao = resultado.rastro.chamadas[0]
+    assert classificacao.modelo == config.leitor_visual_modelo_classificacao
+    assert resultado.rastro.chamadas[1].modelo == config.leitor_visual_modelo
+    assert "classificacao" in resultado.rastro.tempos_ms
+    assert "desenho:duas_etapas/gpt-6-luna" in resultado.resposta.versao_pipeline
+    # Desenho único devolve os mesmos campos.
+    unico = await criar_esteira(settings).processar("id", _req(conteudo))
+    assert unico.resposta is not None
+    assert unico.resposta.campos == resultado.resposta.campos
+
+
+@pytest.mark.anyio
+async def test_duas_etapas_recusa_tipo_divergente_sem_extrair(settings, gravar) -> None:
+    conteudo = imagem_png(121)
+    gravar(conteudo, gravacao_cpf(cpf_sintetico()))
+    config = settings.model_copy(update={"leitor_visual_desenho": "duas_etapas"})
+    resultado = await criar_esteira(config).processar(
+        "id", _req(conteudo, TipoDocumento.IDENTITY_DOCUMENT)
+    )
+    assert resultado.falha is not None
+    assert [m.codigo.value for m in resultado.falha.motivos] == ["TIPO_DIVERGENTE"]
+    assert [c.etapa for c in resultado.rastro.chamadas] == ["classificacao"]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("desenho", ["unico", "duas_etapas"])
+async def test_rotacao_informada_pelo_vlm_gira_a_imagem(settings, gravar, desenho) -> None:
+    from app.providers.interfaces import Rotacao
+
+    conteudo = imagem_png(122, tamanho=(400, 260))
+    gravacao = gravacao_cpf(cpf_sintetico())
+    assert gravacao.leitura_visual is not None
+    lv = gravacao.leitura_visual.model_copy(update={"rotacao": Rotacao.GRAUS_90})
+    gravar(conteudo, gravacao.model_copy(update={"leitura_visual": lv}))
+    config = settings.model_copy(update={"leitor_visual_desenho": desenho})
+    resultado = await criar_esteira(config).processar("id", _req(conteudo))
+    preparada = resultado.rastro.imagem_preparada
+    assert preparada is not None
+    assert (preparada.largura, preparada.altura) == (260, 400)
+
+
+@pytest.mark.anyio
+async def test_resposta_fora_do_schema_e_falha_do_provider(settings, gravar, monkeypatch) -> None:
+    from app.providers.fake import FakeLeitorVisual
+    from app.providers.interfaces import RespostaVisual
+
+    async def quebrada(self, pedido):
+        return RespostaVisual(
+            {"documento": {"subtipo": "INVENTADO"}},
+            {},
+            MetricasChamada("fake", "m", "leitura_visual"),
+        )
+
+    monkeypatch.setattr(FakeLeitorVisual, "ler", quebrada)
+    resultado = await criar_esteira(settings).processar("id", _req(imagem_png(123)))
+    assert resultado.falha is not None
+    assert resultado.falha.codigo.value == "PROVIDER_INDISPONIVEL"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("fonte", "esperado"),
+    [
+        ("vlm", []),
+        ("heuristica", ["PRINT_DE_TELA"]),
+        ("qualquer", ["PRINT_DE_TELA"]),
+        ("ambas", []),
+    ],
+)
+async def test_sinalizacao_de_captura_por_fonte(settings, gravar, fonte, esperado) -> None:
+    # imagem_png é um arquivo digital limpo: a heurística vê print; o VLM gravado diz FOTO.
+    conteudo = imagem_png(124)
+    gravar(conteudo, gravacao_cpf(cpf_sintetico()))
+    config = settings.model_copy(update={"sinalizacao_captura_fonte": fonte})
+    resultado = await criar_esteira(config).processar("id", _req(conteudo))
+    assert resultado.resposta is not None
+    assert [s.value for s in resultado.resposta.sinalizacoes] == esperado
+    assert resultado.resposta.status is StatusDocumento.REVISAO  # sinalização nunca muda status
+
+
+@pytest.mark.anyio
+async def test_reprovacao_de_qualidade_e_422_sem_chamar_provider(settings, gravar) -> None:
+    from PIL import ImageFilter
+
+    imagem = Image.open(io.BytesIO(imagem_png(125))).filter(ImageFilter.GaussianBlur(8))
+    buffer = io.BytesIO()
+    imagem.save(buffer, format="PNG")
+    resultado = await criar_esteira(settings).processar("id", _req(buffer.getvalue()))
+    assert resultado.falha is not None
+    assert "IMAGEM_DESFOCADA" in [m.codigo.value for m in resultado.falha.motivos]
+    assert resultado.rastro.chamadas == []

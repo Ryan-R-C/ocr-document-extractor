@@ -61,7 +61,7 @@ def test_pacote_de_auditoria_completo(cliente, gravar, objetos, repositorio) -> 
     assert manifesto["regras"]["aplicadas"][0]["versao"]
     assert manifesto["decisao"]["status"] == "REVISAO"
     assert manifesto["recebido_em"] and manifesto["concluido_em"]
-    assert set(manifesto["stubs_ativos"]) == {"qualidade", "ancoragem", "releitura", "regras"}
+    assert set(manifesto["stubs_ativos"]) == {"ancoragem", "releitura", "regras"}
 
     processamento = repositorio.obter(id_proc)
     assert processamento.sha256_imagem == sha

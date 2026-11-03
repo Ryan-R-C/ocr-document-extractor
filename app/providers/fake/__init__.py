@@ -1,23 +1,25 @@
 """Providers fake determinísticos: devolvem respostas gravadas por hash do arquivo recebido.
 
 Servem para os testes e para o avaliador rodar sem custo. Imagem sem gravação devolve
-documento NAO_IDENTIFICADO e nenhum campo: o fake nunca inventa valor.
+documento NAO_IDENTIFICADO e nenhum campo: o fake nunca inventa valor. As caixas gravadas
+são relativas à imagem preparada (documento recortado e redimensionado).
 """
 
 from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from typing import Any, Literal
 
 from app.api.contrato import UF, Lado, StatusLeitura, Subtipo
 from app.config import Settings
 from app.providers.custo import calcular_custo
 from app.providers.fake import gravacoes
-from app.providers.fake.gravacoes import Falha, Gravacao
+from app.providers.fake.gravacoes import CampoGravado, Falha, Gravacao, LeituraVisualGravada
 from app.providers.interfaces import (
     Caixa,
-    CampoLido,
     ErroProvider,
+    EtapaVisual,
     Imagem,
     LeituraTexto,
     LeituraVisual,
@@ -25,10 +27,10 @@ from app.providers.interfaces import (
     MetricasChamada,
     ModoChamada,
     Palavra,
-    PedidoLeituraVisual,
-    PedidoReleitura,
+    PedidoVisual,
     QualidadeCaptura,
-    Releitura,
+    RespostaVisual,
+    Rotacao,
 )
 
 NOME = "fake"
@@ -69,62 +71,98 @@ class _BaseFake:
 
 
 class FakeLeitorVisual(_BaseFake):
-    async def ler(self, pedido: PedidoLeituraVisual) -> LeituraVisual:
+    """Monta o JSON que um provider real devolveria para cada etapa, a partir da gravação.
+
+    Sem gravação: documento NAO_IDENTIFICADO na leitura e na classificação; na extração e
+    na releitura, todos os campos ILEGIVEL. Nunca inventa valor.
+    """
+
+    async def ler(self, pedido: PedidoVisual) -> RespostaVisual:
         gravacao = self._gravacao(pedido.imagem.sha256_origem)
-        await self._simular_falha(gravacao.falhas.get("leitura_visual") if gravacao else None)
+        chave: Literal["releitura", "leitura_visual"] = (
+            "releitura" if pedido.etapa is EtapaVisual.RELEITURA else "leitura_visual"
+        )
+        await self._simular_falha(gravacao.falhas.get(chave) if gravacao else None)
         lv = gravacao.leitura_visual if gravacao else None
-        if lv is None:
-            return LeituraVisual(
-                subtipo=Subtipo.NAO_IDENTIFICADO,
-                uf=UF.NAO_IDENTIFICADO,
-                lado=Lado.NAO_IDENTIFICADO,
-                tipo_documento_detectado=None,
-                qualidade_captura=QualidadeCaptura.NAO_IDENTIFICADO,
-                campos={},
-                resposta_bruta={"gravacao": None},
-                metricas=self._metricas("leitura_visual", pedido.modelo, 0, 0, 0.0, pedido.modo),
+        modelo = (lv.modelo if lv else None) or pedido.modelo
+        entrada, saida, latencia = (
+            (lv.tokens_entrada, lv.tokens_saida, lv.latencia_ms) if lv else (0, 0, 0.0)
+        )
+
+        dados: dict[str, Any]
+        if pedido.etapa is EtapaVisual.LEITURA:
+            dados = {**self._classificacao(lv), "documento": self._documento(lv)}
+        elif pedido.etapa is EtapaVisual.CLASSIFICACAO:
+            dados = {
+                **self._classificacao(lv),
+                "subtipo": lv.subtipo.value if lv else "NAO_IDENTIFICADO",
+            }
+            modelo = pedido.modelo
+            if lv:
+                entrada, saida, latencia = (
+                    lv.classificacao_tokens_entrada,
+                    lv.classificacao_tokens_saida,
+                    lv.classificacao_latencia_ms,
+                )
+        elif pedido.etapa is EtapaVisual.EXTRACAO:
+            nomes = list(pedido.schema["properties"]["campos"]["properties"])
+            gravados = lv.campos if lv and lv.subtipo is pedido.subtipo else {}
+            dados = {"campos": {n: self._campo(gravados.get(n)) for n in nomes}}
+        else:
+            r = gravacao.releituras.get(pedido.campo or "") if gravacao else None
+            dados = self._campo(r)
+            modelo = (r.modelo if r else None) or pedido.modelo
+            entrada, saida, latencia = (
+                (r.tokens_entrada, r.tokens_saida, r.latencia_ms) if r else (0, 0, 0.0)
             )
-        modelo = lv.modelo or pedido.modelo
-        return LeituraVisual(
-            subtipo=lv.subtipo,
-            uf=lv.uf,
-            lado=lv.lado,
-            tipo_documento_detectado=lv.tipo_documento_detectado,
-            qualidade_captura=lv.qualidade_captura,
-            campos={
-                nome: CampoLido(c.status, c.rotulo_visto, c.texto_literal)
-                for nome, c in lv.campos.items()
-            },
-            resposta_bruta=lv.model_dump(mode="json"),
+
+        return RespostaVisual(
+            dados=dados,
+            resposta_bruta={"fake": True, "dados": dados},
             metricas=self._metricas(
-                "leitura_visual",
-                modelo,
-                lv.tokens_entrada,
-                lv.tokens_saida,
-                lv.latencia_ms,
-                pedido.modo,
+                pedido.etapa.value, modelo, entrada, saida, latencia, pedido.modo
             ),
         )
 
-    async def reler(self, pedido: PedidoReleitura) -> Releitura:
-        gravacao = self._gravacao(pedido.recorte.sha256_origem)
-        await self._simular_falha(gravacao.falhas.get("releitura") if gravacao else None)
-        r = gravacao.releituras.get(pedido.campo) if gravacao else None
-        if r is None:
-            campo = CampoLido(StatusLeitura.ILEGIVEL, "", "")
-            return Releitura(
-                campo=campo,
-                resposta_bruta={"gravacao": None},
-                metricas=self._metricas("releitura", pedido.modelo, 0, 0, 0.0, pedido.modo),
-            )
-        modelo = r.modelo or pedido.modelo
-        return Releitura(
-            campo=CampoLido(r.status, r.rotulo_visto, r.texto_literal),
-            resposta_bruta=r.model_dump(mode="json"),
-            metricas=self._metricas(
-                "releitura", modelo, r.tokens_entrada, r.tokens_saida, r.latencia_ms, pedido.modo
-            ),
-        )
+    @staticmethod
+    def _campo(gravado: CampoGravado | None) -> dict[str, str]:
+        if gravado is None:
+            return {"status": StatusLeitura.ILEGIVEL.value, "rotulo_visto": "", "texto_literal": ""}
+        return {
+            "status": gravado.status.value,
+            "rotulo_visto": gravado.rotulo_visto,
+            "texto_literal": gravado.texto_literal,
+        }
+
+    @staticmethod
+    def _classificacao(lv: LeituraVisualGravada | None) -> dict[str, str]:
+        if lv is None:
+            return {
+                "tipo_documento_detectado": "NAO_IDENTIFICADO",
+                "uf": UF.NAO_IDENTIFICADO.value,
+                "lado": Lado.NAO_IDENTIFICADO.value,
+                "qualidade_captura": QualidadeCaptura.NAO_IDENTIFICADO.value,
+                "rotacao": Rotacao.NAO_IDENTIFICADO.value,
+                "modelo_documento": "",
+            }
+        return {
+            "tipo_documento_detectado": lv.tipo_documento_detectado.value
+            if lv.tipo_documento_detectado
+            else "NAO_IDENTIFICADO",
+            "uf": lv.uf.value,
+            "lado": lv.lado.value,
+            "qualidade_captura": lv.qualidade_captura.value,
+            "rotacao": lv.rotacao.value,
+            "modelo_documento": lv.modelo_documento,
+        }
+
+    def _documento(self, lv: LeituraVisualGravada | None) -> dict[str, object]:
+        if lv is None:
+            return {"subtipo": Subtipo.NAO_IDENTIFICADO.value, "campos": {}}
+        return {
+            "subtipo": lv.subtipo.value,
+            "campos": {n: self._campo(c) for n, c in lv.campos.items()},
+        }
 
 
 class FakeLeitorTexto(_BaseFake):
