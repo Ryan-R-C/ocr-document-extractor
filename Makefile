@@ -1,5 +1,5 @@
 # Comandos do projeto. Requer uv (https://docs.astral.sh/uv/) e Docker.
-.PHONY: setup up down logs test test-integracao lint formatar openapi avaliar comparar \
+.PHONY: setup up down logs test test-integracao test-ocr lint formatar openapi avaliar comparar \
         gabarito-sintetico estratificar limpeza
 
 CONFIG ?= avaliacao/configs/sintetico.toml
@@ -7,8 +7,8 @@ PARTICAO ?= ajuste
 MODO ?= padrao
 MANIFESTO ?= dados/sintetico/manifesto.jsonl
 
-setup:  ## dependências, .env local e gabarito sintético de demonstração
-	uv sync
+setup:  ## dependências (com o PaddleOCR), .env local e gabarito sintético de demonstração
+	uv sync --extra ocr
 	@test -f .env || cp .env.example .env
 	@test -f $(MANIFESTO) || $(MAKE) gabarito-sintetico
 
@@ -26,6 +26,9 @@ test:  ## testes sem dependências externas (fakes, SQLite, S3 simulado)
 
 test-integracao:  ## testes contra o postgres e o s3 do docker compose
 	uv run pytest -m integracao
+
+test-ocr:  ## o teste que roda o PaddleOCR de verdade (precisa do extra ocr e dos pesos)
+	uv run pytest -m ocr_real
 
 lint:  ## ruff, formatação e tipos
 	uv run ruff check .

@@ -73,7 +73,7 @@ docs/
 
 Do plano: Python, FastAPI, Pydantic, OpenCV, Pillow, PyMuPDF, PaddleOCR, validate-docbr, PostgreSQL, armazenamento compatível com S3, contêineres Docker escalando horizontalmente.
 
-Adotado (ver `docs/decisoes.md`): Python 3.12, uv, pydantic-settings, SQLAlchemy 2 + Alembic, structlog, pypdfium2 (no lugar do PyMuPDF, AGPL), pillow-heif (HEIC), RustFS como S3 local (a imagem do MinIO saiu do Docker Hub), pytest, moto, ruff, mypy; na Fase 1, opencv-python-headless 4.x (pré-processamento) e o SDK `openai` 3.x (Responses API).
+Adotado (ver `docs/decisoes.md`): Python 3.12, uv, pydantic-settings, SQLAlchemy 2 + Alembic, structlog, pypdfium2 (no lugar do PyMuPDF, AGPL), pillow-heif (HEIC), RustFS como S3 local (a imagem do MinIO saiu do Docker Hub), pytest, moto, ruff, mypy; na Fase 1, OpenCV (pré-processamento) e o SDK `openai` 3.x (Responses API); na Fase 2, PaddleOCR 3.x + PaddlePaddle 3.x em CPU (extra `ocr`), o que troca o `opencv-python-headless` pelo `opencv-contrib-python` exigido pelo PaddleX.
 
 ## Convenções
 
@@ -98,7 +98,9 @@ Atualize esta seção à medida que os comandos existirem.
 
 - `make setup`: dependências, `.env` a partir do `.env.example` e gabarito sintético de demonstração
 - `make up` / `make down`: api, postgres, s3 (RustFS) e o job de limpeza via Docker Compose; o serviço `preparar` aplica as migrações e configura o bucket
+- `make setup` instala o extra `ocr` (PaddleOCR); os pesos vêm do Hugging Face no primeiro uso, ou já estão na imagem Docker
 - `make test`: testes sem dependências externas (fakes, SQLite, S3 simulado com moto)
+- `make test-ocr`: o teste que roda o PaddleOCR de verdade (marcador `ocr_real`)
 - `make test-integracao`: testes contra o postgres e o s3 do compose
 - `make lint`: ruff, formatação e mypy
 - `make openapi`: regenera `docs/openapi.json`; o teste de contrato falha se ele divergir
@@ -106,6 +108,8 @@ Atualize esta seção à medida que os comandos existirem.
 - `make comparar RELATORIOS="<a>/relatorio.json <b>/relatorio.json"`: rodadas lado a lado (desenho, modelo, esforço)
 - `uv run gabarito {sintetico,importar-csv,particionar,validar,estratificar,apagar-campos}`: ver `docs/gabarito.md`
 - `uv run limpeza [--loop]`: job de limpeza do TTL
+- `uv run medir-ocr --imagens <dir> [--limite N]`: tempo e memória do PaddleOCR por imagem (rodar no container)
+- `uv run revisao exportar|importar`: casos em revisão para conferência humana e de volta ao gabarito (ver `docs/gabarito.md`)
 
 ## Decisões em aberto — não decidir sozinho
 
