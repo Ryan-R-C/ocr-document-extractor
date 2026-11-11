@@ -58,7 +58,7 @@ def test_avaliador_ponta_a_ponta(gabarito: Path, tmp_path: Path) -> None:
     execucao, m = relatorio["execucao"], relatorio["metricas"]
     assert execucao["itens"] == len(itens)
     assert execucao["variantes"] > 0
-    assert set(execucao["stubs_ativos"]) == {"ancoragem", "releitura", "regras"}
+    assert set(execucao["stubs_ativos"]) == {"regras", "digitos"}
 
     geral = m["geral"]
     assert geral["documentos"] == len(itens)

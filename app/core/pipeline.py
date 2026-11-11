@@ -4,12 +4,14 @@ Etapas: pré-processamento → leitura visual (desenho único ou em duas etapas)
 texto → ancoragem → localização e recortes → releitura dirigida → regras → decisão. O mesmo
 código roda na API e no avaliador.
 
-Ancoragem, releitura e regras ainda são stubs (Fases 2 e 3) e nunca levam a APROVADO.
+Ancoragem, localização e releitura são reais desde a Fase 2. O motor de regras e a checagem
+de dígitos verificadores ainda são stubs (Fase 3): sem eles, nada chega a APROVADO.
 """
 
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import io
 import time
 from collections.abc import Awaitable, Callable, Iterator
@@ -18,19 +20,24 @@ from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from typing import Any
 
+from PIL import Image as PILImage
+
 from app.api.contrato import (
     Documento,
     MotivoErro,
     RequisicaoExtracao,
     RespostaExtracao,
+    Subtipo,
     TipoDocumento,
 )
 from app.config import Settings
 from app.core import ancoragem as mod_ancoragem
 from app.core import decisao as mod_decisao
+from app.core import digitos as mod_digitos
 from app.core import releitura as mod_releitura
-from app.core.ancoragem import ResultadoAncoragem
+from app.core.ancoragem import ParametrosAncoragem, ResultadoAncoragem
 from app.core.decisao import Decisao
+from app.core.digitos import ChecadorDigitos, ResultadoDigitos
 from app.core.erros import (
     FalhaArquivoGrande,
     FalhaExtracao,
@@ -57,6 +64,7 @@ from app.providers.interfaces import (
     MetricasChamada,
     ModoChamada,
     PedidoVisual,
+    Releitura,
     RespostaVisual,
     Rotacao,
     TempoEsgotadoProvider,
@@ -64,7 +72,13 @@ from app.providers.interfaces import (
 from app.regras import motor
 from app.regras.motor import ResultadoValidacao
 from app.schemas import respostas
-from app.schemas.campos import schema_classificacao, schema_extracao, schema_leitura
+from app.schemas.campos import (
+    campos_do_subtipo,
+    schema_classificacao,
+    schema_extracao,
+    schema_leitura,
+    schema_releitura,
+)
 
 
 @dataclass
@@ -88,7 +102,10 @@ class Rastro:
     classificacao: LeituraVisual | None = None
     leitura_visual: LeituraVisual | None = None
     leitura_texto: LeituraTexto | None = None
+    # Desenho único com documento girado: OCR da imagem antes de girar (descartado).
+    leitura_texto_antes_de_girar: LeituraTexto | None = None
     ancoragens: dict[str, ResultadoAncoragem] = field(default_factory=dict)
+    digitos: dict[str, ResultadoDigitos] = field(default_factory=dict)
     caixas: dict[str, Caixa] = field(default_factory=dict)
     recortes: dict[str, bytes] = field(default_factory=dict)
     releituras: dict[str, ResultadoReleitura] = field(default_factory=dict)
@@ -130,6 +147,8 @@ def _stubs_ativos() -> list[str]:
         stubs.append("ancoragem")
     if not mod_releitura.IMPLEMENTADO:
         stubs.append("releitura")
+    if not mod_digitos.IMPLEMENTADO:
+        stubs.append("digitos")
     if not motor.IMPLEMENTADO:
         stubs.append("regras")
     return stubs
@@ -141,25 +160,52 @@ def _girar(imagem: Imagem, rotacao: Rotacao) -> Imagem:
     return para_imagem(documento.girar(abrir_pil(imagem), int(rotacao.value)), imagem.sha256_origem)
 
 
-def _recortar(imagem: Imagem, caixa: Caixa, margem: float = 0.15) -> bytes:
+def recortar(imagem: Imagem, caixa: Caixa, settings: Settings) -> Imagem:
+    """Recorte do campo com margem, ampliado até a altura mínima (limite de ampliação em
+    configuração). É o que vai para a releitura e para o pacote de auditoria."""
     pil = abrir_pil(imagem)
-    mx = max(8, int(caixa.largura * margem))
-    my = max(8, int(caixa.altura * margem))
+    mx = max(settings.releitura_margem_min_px, int(caixa.largura * settings.releitura_margem))
+    my = max(settings.releitura_margem_min_px, int(caixa.altura * settings.releitura_margem))
     area = (
         max(0, caixa.x - mx),
         max(0, caixa.y - my),
         min(pil.width, caixa.x + caixa.largura + mx),
         min(pil.height, caixa.y + caixa.altura + my),
     )
+    recorte = pil.crop(area)
+    fator = min(
+        settings.releitura_ampliacao_max,
+        max(1.0, settings.releitura_altura_min_px / max(1, recorte.height)),
+    )
+    if fator > 1.0:
+        recorte = recorte.resize(
+            (round(recorte.width * fator), round(recorte.height * fator)),
+            resample=PILImage.Resampling.LANCZOS,
+        )
     buffer = io.BytesIO()
-    pil.crop(area).save(buffer, format="PNG", compress_level=1)
-    return buffer.getvalue()
+    recorte.save(buffer, format="PNG", compress_level=1)
+    conteudo = buffer.getvalue()
+    return Imagem(
+        conteudo=conteudo,
+        mime="image/png",
+        largura=recorte.width,
+        altura=recorte.height,
+        sha256=hashlib.sha256(conteudo).hexdigest(),
+        sha256_origem=imagem.sha256_origem,
+    )
 
 
 class Esteira:
-    def __init__(self, settings: Settings, dependencias: Dependencias) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        dependencias: Dependencias,
+        checar_digitos: ChecadorDigitos = mod_digitos.checar_pendente,
+    ) -> None:
         self.settings = settings
         self.deps = dependencias
+        # Interface com a Fase 3 (app/regras/digitos.py), integrada no portão 2+3.
+        self.checar_digitos = checar_digitos
 
     @property
     def versao(self) -> str:
@@ -253,13 +299,19 @@ class Esteira:
         )
         subtipo = leitura_visual.subtipo
 
-        # 4. Ancoragem
+        definicoes = campos_do_subtipo(subtipo)
+        parametros = ParametrosAncoragem.de(settings, subtipo.value)
+
+        # 4. Ancoragem no OCR
         with rastro.cronometro("ancoragem"):
-            rastro.ancoragens = mod_ancoragem.ancorar(leitura_visual.campos, leitura_texto)
+            rastro.ancoragens = mod_ancoragem.ancorar(
+                definicoes, leitura_visual.campos, leitura_texto, parametros
+            )
+            preparados = mod_decisao.preparar_campos(subtipo, leitura_visual.campos)
 
         # Localização e recortes (auditoria e releitura)
+        recortes: dict[str, Imagem] = {}
         with rastro.cronometro("localizacao"):
-            preparados = mod_decisao.preparar_campos(subtipo, leitura_visual.campos)
             com_valor = [n for n, p in preparados.items() if p.valor is not None]
             localizacao = await self.deps.localizador.localizar(
                 imagem, leitura_visual, leitura_texto, com_valor
@@ -267,21 +319,47 @@ class Esteira:
             if localizacao.metricas:
                 rastro.chamadas.append(localizacao.metricas)
             rastro.caixas = localizacao.caixas
-            rastro.recortes = {
-                nome: await asyncio.to_thread(_recortar, imagem, caixa)
-                for nome, caixa in localizacao.caixas.items()
-            }
+            for nome, caixa in localizacao.caixas.items():
+                recortes[nome] = await asyncio.to_thread(recortar, imagem, caixa, settings)
+            rastro.recortes = {nome: r.conteudo for nome, r in recortes.items()}
 
-        # 5. Releitura dirigida
+        # Dígitos verificadores (Fase 3): só dizem se confere; nunca corrigem.
+        rastro.digitos = {
+            nome: self.checar_digitos(p.definicao.tipo_valor, p.valor_normalizado)
+            for nome, p in preparados.items()
+            if p.definicao.critico and p.valor_normalizado is not None
+        }
+
+        # 5. Releitura dirigida: no máximo uma por campo
         with rastro.cronometro("releitura"):
-            rastro.releituras = await mod_releitura.reler(
-                mod_releitura.campos_para_reler(rastro.ancoragens)
+            campos_reler = {
+                nome: mod_releitura.CampoParaReler(
+                    definicao=p.definicao,
+                    status_leitura=p.status_leitura,
+                    texto_vlm=p.valor or "",
+                    rotulo_visto=lido.rotulo_visto
+                    if (lido := leitura_visual.campos.get(nome))
+                    else "",
+                )
+                for nome, p in preparados.items()
+            }
+            plano = mod_releitura.planejar(campos_reler, rastro.ancoragens, rastro.digitos)
+            rastro.releituras = await mod_releitura.executar(
+                plano,
+                campos_reler,
+                rastro.ancoragens,
+                tem_caixa=lambda nome: nome in recortes,
+                ler=lambda nome: self._reler(rastro, nome, recortes[nome], subtipo, modo),
+                leitura_texto=leitura_texto,
+                parametros=parametros,
+                modelo_principal=leitura_visual.metricas.modelo,
             )
             for r in rastro.releituras.values():
                 if r.releitura is not None:
                     rastro.chamadas.append(r.releitura.metricas)
+            preparados = mod_decisao.aplicar_releituras(preparados, rastro.releituras)
 
-        # 6. Regras e decisão
+        # 6. Regras (de novo, sobre os valores depois da releitura) e decisão
         with rastro.cronometro("regras"):
             rastro.validacao = motor.validar(
                 subtipo, {n: p.entrada_regra() for n, p in preparados.items()}
@@ -310,6 +388,40 @@ class Esteira:
             campos=rastro.decisao.campos,
             sinalizacoes=rastro.decisao.sinalizacoes,
             versao_pipeline=rastro.versao_pipeline,
+        )
+
+    async def _reler(
+        self, rastro: Rastro, nome: str, recorte: Imagem, subtipo: Subtipo, modo: ModoChamada
+    ) -> Releitura:
+        """Releitura de um campo: recorte ampliado, schema de um campo, modelo de escalada.
+        O prompt diz qual é o campo, nunca o valor esperado nem as leituras anteriores."""
+        defn = next(d for d in campos_do_subtipo(subtipo) if d.nome == nome)
+        prompt = (
+            carregar_prompt("releitura")
+            .replace("{{campo}}", nome)
+            .replace("{{rotulos}}", ", ".join(defn.rotulos) or "(sem rótulo impresso)")
+        )
+        pedido = PedidoVisual(
+            etapa=EtapaVisual.RELEITURA,
+            imagem=recorte,
+            tipo_documento=rastro.tipo_documento,
+            schema=schema_releitura(),
+            nome_schema="releitura_campo",
+            prompt=prompt,
+            modelo=self.settings.leitor_visual_modelo_escalada,
+            modo=modo,
+            subtipo=subtipo,
+            campo=nome,
+        )
+        try:
+            resposta = await self.deps.leitor_visual.ler(pedido)
+            campo = respostas.interpretar_campo(resposta.dados, nome)
+        except ImagemRecusadaLocalmente:
+            raise ErroProvider("recorte recusado pelo provider") from None
+        except respostas.RespostaInvalida:
+            raise ErroProvider("releitura fora do schema") from None
+        return Releitura(
+            campo=campo, resposta_bruta=resposta.resposta_bruta, metricas=resposta.metricas
         )
 
     def _pedido(
@@ -362,7 +474,15 @@ class Esteira:
             )
         )
         mod_decisao.verificar_classificacao(rastro.tipo_documento, leitura)
-        rastro.imagem_preparada = await asyncio.to_thread(_girar, imagem, leitura.rotacao)
+        de_pe = await asyncio.to_thread(_girar, imagem, leitura.rotacao)
+        rastro.imagem_preparada = de_pe
+        if de_pe is not imagem:
+            # O OCR leu o documento deitado ou de cabeça para baixo: lê de novo de pé, para
+            # as caixas e o texto valerem na imagem que segue na esteira.
+            rastro.leitura_texto_antes_de_girar = texto
+            with rastro.cronometro("leitura_texto_de_pe"):
+                texto = await self._chamar(self.deps.leitor_texto.ler(de_pe))
+            rastro.chamadas.append(texto.metricas)
         return leitura, texto
 
     async def _ler_em_duas_etapas(

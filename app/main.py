@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import math
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import FastAPI, Request
@@ -98,12 +99,15 @@ def criar_app(
     settings = settings or obter_settings()
     configurar_logs(settings.log_level, settings.log_json)
 
+    aquecer: Callable[[], None] | None = None
     if servico is None:
         engine = criar_engine(settings)
         objetos = Objetos(settings)
-        servico = ServicoExtracao(
-            settings, criar_esteira(settings), Repositorio(criar_sessoes(engine)), objetos
-        )
+        esteira = criar_esteira(settings)
+        servico = ServicoExtracao(settings, esteira, Repositorio(criar_sessoes(engine)), objetos)
+        candidato = getattr(esteira.deps.leitor_texto, "aquecer", None)
+        if settings.leitor_texto_aquecer and callable(candidato):
+            aquecer = candidato
 
         async def verificar_padrao() -> dict[str, str]:
             banco, s3 = await asyncio.gather(
@@ -116,11 +120,24 @@ def criar_app(
     async def sem_verificacao() -> dict[str, str]:
         return {}
 
+    @asynccontextmanager
+    async def ciclo_de_vida(_: FastAPI) -> AsyncIterator[None]:
+        # Carrega o modelo do OCR antes da primeira requisição.
+        if aquecer is not None:
+            inicio = asyncio.get_running_loop().time()
+            await asyncio.to_thread(aquecer)
+            log.info(
+                "leitor_texto_aquecido",
+                segundos=round(asyncio.get_running_loop().time() - inicio, 2),
+            )
+        yield
+
     app = FastAPI(
         title="Extração e validação de documentos admissionais",
         version=VERSAO_SERVICO,
         description="Recebe a imagem de um documento com o tipo declarado, extrai os campos e "
         "valida cada valor dentro do próprio documento.",
+        lifespan=ciclo_de_vida,
     )
     _openapi_padrao = app.openapi
 

@@ -3,9 +3,10 @@
 Conteúdo (sob `<prefixo>/<id_processamento>/`):
 - `imagem_recebida.<ext>` e o hash em `auditoria.json`
 - `imagem_normalizada.png`, `imagem_enviada.png` (recortada, girada e redimensionada,
-  quando difere) e `recortes/<campo>.png`
-- `auditoria.json`: respostas brutas dos providers com tokens e custo, ancoragens,
-  releituras, regras aplicadas (id e versão), decisão final, versao_pipeline, horários,
+  quando difere) e `recortes/<campo>.png` (o recorte ampliado enviado à releitura)
+- `auditoria.json`: respostas brutas dos providers com tokens e custo, ancoragens (ids e
+  caixas das palavras do OCR), dígitos verificadores, releituras com a votação, regras
+  aplicadas (id e versão), decisão final, versao_pipeline, horários,
   id_externo, tempos por etapa e stubs ativos
 - `resposta.json`: código HTTP e corpo devolvido (usado pelo cache)
 
@@ -99,12 +100,25 @@ def manifesto(
         "leitura_texto": {"resposta_bruta": lt.resposta_bruta, "metricas": _dc(lt.metricas)}
         if lt
         else None,
+        "leitura_texto_antes_de_girar": {
+            "resposta_bruta": r.leitura_texto_antes_de_girar.resposta_bruta,
+            "metricas": _dc(r.leitura_texto_antes_de_girar.metricas),
+        }
+        if r.leitura_texto_antes_de_girar
+        else None,
         "ancoragens": {k: _dc(v) for k, v in r.ancoragens.items()},
         "caixas": {k: _dc(v) for k, v in r.caixas.items()},
+        "digitos": {k: v.value for k, v in r.digitos.items()},
         "releituras": {
             k: {
                 "executada": v.executada,
+                "disparo": v.disparo.value if v.disparo else None,
                 "concordancia": v.concordancia,
+                "leituras_concordantes": list(v.leituras_concordantes),
+                "valor_final": v.valor_final,
+                "ocr_concorda": v.ocr_concorda,
+                "modelos_diferentes": v.modelos_diferentes,
+                "ancoragem_final": _dc(v.ancoragem_final),
                 "motivo_nao_executada": v.motivo_nao_executada,
                 "resposta_bruta": v.releitura.resposta_bruta if v.releitura else None,
                 "metricas": _dc(v.releitura.metricas) if v.releitura else None,

@@ -12,8 +12,6 @@ from app.providers.interfaces import (
     LeitorTexto,
     LeitorVisual,
     LeituraTexto,
-    LeituraVisual,
-    Localizacao,
     Localizador,
     MetricasChamada,
 )
@@ -24,25 +22,7 @@ class ProviderNaoImplementado(RuntimeError):
     pass
 
 
-_FASE = {"paddleocr": "Fase 2", "tesseract": "Fase 4"}
-
-
-class LocalizadorPorOCR:
-    """Caixas a partir das palavras do OCR clássico.
-
-    STUB da Fase 0: não localiza nada (sem recortes, sem releitura). Implementação na Fase 2.
-    """
-
-    nome = "ocr"
-
-    async def localizar(
-        self,
-        imagem: Imagem,
-        leitura_visual: LeituraVisual,
-        leitura_texto: LeituraTexto,
-        campos: list[str],
-    ) -> Localizacao:
-        return Localizacao()
+_FASE = {"tesseract": "Fase 4"}
 
 
 class LeitorTextoNenhum:
@@ -77,6 +57,10 @@ def _texto(nome: str, settings: Settings) -> LeitorTexto:
         return FakeLeitorTexto(settings)
     if nome == "nenhum":
         return LeitorTextoNenhum()
+    if nome == "paddleocr":
+        from app.providers.paddleocr import LeitorTextoPaddleOCR
+
+        return LeitorTextoPaddleOCR(settings)
     raise ProviderNaoImplementado(f"leitor de texto {nome!r}: {_FASE.get(nome, 'desconhecido')}")
 
 
@@ -86,7 +70,9 @@ def _localizador(nome: str, settings: Settings) -> Localizador:
 
         return FakeLocalizador(settings)
     if nome == "ocr":
-        return LocalizadorPorOCR()
+        from app.core.localizacao import LocalizadorPorOCR
+
+        return LocalizadorPorOCR(settings)
     raise ProviderNaoImplementado(f"localizador {nome!r}")
 
 

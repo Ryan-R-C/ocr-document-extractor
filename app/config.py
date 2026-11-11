@@ -56,6 +56,17 @@ class RegraImagemModelo(BaseModel):
     patches_max: PositiveInt = 30_000
 
 
+class RegiaoAncoragem(BaseModel):
+    """Onde o valor pode estar em relação ao rótulo, em múltiplos da altura do rótulo."""
+
+    # Mesma linha, à direita: distância horizontal máxima entre o fim do rótulo e o valor.
+    direita_max_alturas: NonNegativeFloat = 25.0
+    # Linhas logo abaixo: distância vertical máxima entre a base do rótulo e o topo do valor.
+    abaixo_max_alturas: NonNegativeFloat = 3.0
+    # Abaixo: quanto o valor pode começar antes do rótulo ou terminar depois dele.
+    abaixo_folga_alturas: NonNegativeFloat = 8.0
+
+
 class LimiteProvider(BaseModel):
     concorrencia: PositiveInt = 8
     tokens_por_minuto: PositiveInt = 2_000_000
@@ -96,6 +107,41 @@ class Settings(BaseSettings):
     leitor_visual_max_tokens_saida: PositiveInt = 4_000
     modelos_imagem: dict[str, RegraImagemModelo] = Field(default_factory=dict)
     leitor_texto_provider: str = "paddleocr"
+    # PaddleOCR em CPU. Sem modelos explícitos, o idioma escolhe (pt → PP-OCRv6 medium).
+    # Alternativa mais rápida medida na Fase 2: PP-OCRv5_mobile_det + latin_PP-OCRv5_mobile_rec.
+    paddleocr_idioma: str = "pt"
+    paddleocr_modelo_deteccao: str | None = None
+    paddleocr_modelo_reconhecimento: str | None = None
+    # Instâncias do modelo por processo (uma por thread de inferência; ~1,3 GB cada).
+    paddleocr_instancias: PositiveInt = 1
+    paddleocr_threads_cpu: PositiveInt = 4
+    # oneDNN falha no Paddle 3.3.1 em CPU; ver docs/decisoes.md.
+    paddleocr_mkldnn: bool = False
+    paddleocr_score_min: Annotated[float, Field(ge=0, le=1)] | None = None
+    # Aquecimento no startup da API (carrega os pesos e roda uma inferência).
+    leitor_texto_aquecer: bool = True
+
+    # --- Ancoragem e releitura -------------------------------------------------------------
+    # Região padrão e ajustes por subtipo (chave: valor do enum Subtipo).
+    ancoragem_regiao_padrao: RegiaoAncoragem = Field(default_factory=RegiaoAncoragem)
+    ancoragem_regioes: dict[str, RegiaoAncoragem] = Field(default_factory=dict)
+    # Confusões do OCR, como pares letra-dígito. Só se aplicam ao texto do OCR e conforme o
+    # tipo do campo: em campo numérico a letra do OCR conta como o dígito; em campo de texto,
+    # o dígito do OCR conta como a letra; em alfanumérico, os dois sentidos.
+    ancoragem_confusoes: list[str] = Field(
+        default_factory=lambda: ["O0", "Q0", "D0", "I1", "L1", "S5", "Z2", "B8", "G6"]
+    )
+    # Semelhança mínima (0 a 1) para reconhecer o rótulo nas palavras do OCR.
+    ancoragem_rotulo_similaridade_min: Annotated[float, Field(ge=0, le=1)] = 0.8
+    # Diferença de um único caractere só conta como ancoragem PARCIAL a partir deste tamanho.
+    ancoragem_parcial_tamanho_min: PositiveInt = 8
+    # Quantas palavras do OCR um valor pode ocupar.
+    ancoragem_palavras_max: PositiveInt = 8
+    # Releitura: margem do recorte (fração da caixa, mínimo em px) e ampliação.
+    releitura_margem: Annotated[float, Field(ge=0, le=2)] = 0.25
+    releitura_margem_min_px: Annotated[int, Field(ge=0)] = 12
+    releitura_altura_min_px: PositiveInt = 96
+    releitura_ampliacao_max: Annotated[float, Field(ge=1)] = 4.0
     localizador_provider: str = "ocr"
     provider_fallback: str | None = None
     provider_timeout_s: Annotated[float, Field(gt=0)] = 30.0
@@ -191,6 +237,9 @@ class Settings(BaseSettings):
         "leitor_visual_esforco_raciocinio",
         "openai_api_key",
         "openai_base_url",
+        "paddleocr_modelo_deteccao",
+        "paddleocr_modelo_reconhecimento",
+        "paddleocr_score_min",
         mode="before",
     )
     @classmethod
@@ -209,6 +258,9 @@ class Settings(BaseSettings):
 
     def limite_provider(self, provider: str) -> LimiteProvider:
         return self.provider_limites.get(provider, LimiteProvider())
+
+    def regiao_ancoragem(self, subtipo: str) -> RegiaoAncoragem:
+        return self.ancoragem_regioes.get(subtipo, self.ancoragem_regiao_padrao)
 
     def regra_imagem(self, modelo: str) -> RegraImagemModelo:
         if modelo in self.modelos_imagem:

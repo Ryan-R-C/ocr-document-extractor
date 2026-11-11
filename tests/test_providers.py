@@ -123,8 +123,12 @@ def test_custo_por_modelo_e_modo() -> None:
 
 
 def test_provider_nao_implementado_falha_cedo() -> None:
-    with pytest.raises(ProviderNaoImplementado, match="Fase 2"):
-        criar_dependencias(Settings(_env_file=None, leitor_visual_provider="fake"))
+    with pytest.raises(ProviderNaoImplementado, match="Fase 4"):
+        criar_dependencias(
+            Settings(
+                _env_file=None, leitor_visual_provider="fake", leitor_texto_provider="tesseract"
+            )
+        )
 
 
 def test_somente_providers_importam_sdk() -> None:
