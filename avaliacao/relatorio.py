@@ -50,6 +50,59 @@ def _tabela_grupo(titulo: str, grupos: dict[str, dict[str, Any]]) -> list[str]:
     return linhas
 
 
+def _segundo_leitor(
+    sl: dict[str, Any], escalada: dict[str, Any], por: dict[str, dict[str, Any]]
+) -> list[str]:
+    linhas = [
+        "",
+        "## Segundo leitor (ancoragem e releitura)",
+        "",
+        "Erro escapado aprovando todo crítico `LEGIVEL` ancorado no OCR (ou com dupla leitura, "
+        "no manuscrito), ainda sem as regras:",
+        "",
+        "| Métrica | Valor |",
+        "|---|---|",
+        f"| Erro escapado (críticos) | {_pct(sl['taxa_erro_escapado'])} "
+        f"({sl['erros_escapados']}/{sl['criticos_aprovados']}) |",
+        f"| Alucinações em críticos | {sl['alucinacoes_criticos']} |",
+        f"| Taxa de ancoragem (antes da releitura) | {_pct(sl['taxa_ancoragem'])} |",
+        f"| Taxa de ancoragem dos críticos | {_pct(sl['taxa_ancoragem_criticos'])} |",
+        f"| Taxa de ancoragem efetiva (depois da releitura) | "
+        f"{_pct(sl['taxa_ancoragem_efetiva'])} |",
+        f"| Ancorados com valor errado | {sl['ancorados_errados']} |",
+        f"| Valor certo sem ancoragem | {sl['valor_certo_nao_ancorado']} |",
+        f"| Taxa de releitura (críticos lidos) | {_pct(sl['taxa_releitura'])} "
+        f"({sl['releituras']}/{sl['criticos_lidos']}) |",
+        f"| Releituras não executadas (sem caixa ou erro) | {sl['releituras_nao_executadas']} |",
+        f"| Corrigidos pela releitura | {sl['corrigidos_pela_releitura']} |",
+        f"| Concordâncias | {_contagem(sl['concordancias'])} |",
+        f"| Documentos com releitura | {_pct(escalada.get('taxa_documentos_com_releitura'))} |",
+        f"| Custo da escalada por documento | "
+        f"{_brl(escalada.get('custo_medio_por_documento_brl'))} |",
+        f"| Fração do custo total | {_pct(escalada.get('fracao_do_custo_total'))} |",
+        "",
+        "### Ancoragem por campo, subtipo e qualidade",
+        "",
+        "| Grupo | Valor | Lidos | Ancoragem | Efetiva | Releitura |",
+        "|---|---|---|---|---|---|",
+    ]
+    for dimensao in ("campo", "subtipo", "qualidade"):
+        for valor, bloco in sorted(por.get(dimensao, {}).items()):
+            g = bloco.get("segundo_leitor")
+            if not g or not g["campos_lidos_impressos"]:
+                continue
+            linhas.append(
+                f"| {dimensao} | {valor} | {g['campos_lidos_impressos']} | "
+                f"{_pct(g['taxa_ancoragem'])} | {_pct(g['taxa_ancoragem_efetiva'])} | "
+                f"{_pct(g['taxa_releitura'])} |"
+            )
+    return linhas
+
+
+def _contagem(contagem: dict[str, int]) -> str:
+    return ", ".join(f"{k}: {v}" for k, v in sorted(contagem.items())) or "—"
+
+
 def markdown(relatorio: dict[str, Any]) -> str:
     meta = relatorio["execucao"]
     m = relatorio["metricas"]
@@ -124,7 +177,8 @@ def markdown(relatorio: dict[str, Any]) -> str:
         "",
         "## Modo medição (baseline)",
         "",
-        "Se todo campo `LEGIVEL` fosse aprovado direto, sem segundo leitor nem regras:",
+        "Se todo campo `LEGIVEL` do VLM principal fosse aprovado direto, sem segundo leitor "
+        "nem regras:",
         "",
         "| Métrica | Valor |",
         "|---|---|",
@@ -133,6 +187,7 @@ def markdown(relatorio: dict[str, Any]) -> str:
         f"| Alucinações em críticos | {med['alucinacoes_criticos']} |",
         f"| Alucinações (todos os campos) | {med['alucinacoes']} |",
         f"| Alucinações no campo apagado | {m['campo_apagado'].get('medicao_alucinacoes', 0)} |",
+        *_segundo_leitor(g["segundo_leitor"], m.get("escalada", {}), m["por"]),
         "",
         "## Classificação",
         "",

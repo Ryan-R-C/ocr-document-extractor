@@ -66,11 +66,16 @@ def test_avaliador_ponta_a_ponta(gabarito: Path, tmp_path: Path) -> None:
     assert geral["desfechos"].get("APROVADO", 0) == 0
     assert geral["criticos_aprovados"] == 0
     assert m["metas"]["alucinacao_criticos_aprovados"]["atingida"] is True
-    # Custo do fake: 3420 tokens de entrada e 600 de saída no gpt-6.1-terra.
-    esperado = (3420 * 1 + 600 * 5) / 1e6 * 5.40
-    docs_lidos = [d for d in geral["desfechos"]]
-    assert docs_lidos
-    assert geral["custo_brl"]["p95"] == pytest.approx(esperado)
+    # Custo do fake: 3420 tokens de entrada e 600 de saída no gpt-6.1-terra; a releitura
+    # (900/40 no gpt-6.1-sol) soma só nos documentos relidos.
+    leitura = (3420 * 1 + 600 * 5) / 1e6 * 5.40
+    releitura = (900 * 2 + 40 * 10) / 1e6 * 5.40
+    relidos = m["escalada"]["documentos_com_releitura"]
+    assert relidos >= 1
+    assert m["escalada"]["custo_total_brl"] == pytest.approx(relidos * releitura)
+    # O resto é um número inteiro de leituras (inclui as recusadas depois da leitura).
+    leituras = (geral["custo_brl"]["total"] - relidos * releitura) / leitura
+    assert leituras == pytest.approx(round(leituras)) and round(leituras) <= len(itens)
     assert m["metas"]["custo_medio_brl"]["atingida"] is True
     for dimensao in ("subtipo", "uf", "qualidade", "campo"):
         assert m["por"][dimensao]
@@ -188,6 +193,8 @@ def test_modo_medicao_e_secoes_da_fase_1(gabarito: Path, tmp_path: Path) -> None
     # Sem segundo leitor nada é aprovado, mas a medição aprova todo LEGIVEL.
     assert m["geral"]["criticos_aprovados"] == 0
     assert medicao["criticos_aprovados"] > 0
+    # A medição usa a leitura do VLM principal: o dígito trocado escapa nela, mesmo que a
+    # releitura o corrija depois.
     if any(i.origem == "sintetico:digito_trocado" for i in itens):
         assert medicao["erros_escapados"] >= 1
     assert m["geral"]["uf_correta"] == 1.0 and m["geral"]["lado_correto"] == 1.0
@@ -423,3 +430,55 @@ def test_percentil() -> None:
     assert metricas.percentil([], 95) is None
     assert metricas.percentil([1, 2, 3, 4], 50) == 2
     assert metricas.percentil(list(range(1, 101)), 95) == 95
+
+
+def test_metricas_do_segundo_leitor(gabarito: Path, tmp_path: Path) -> None:
+    config = _config(gabarito, tmp_path, campo_apagado={"ativo": False})
+    config.settings["localizador_provider"] = "ocr"
+    relatorio, pasta = asyncio.run(avaliar(config, "ajuste", settings=_settings(config)))
+    m = relatorio["metricas"]
+    sl = m["geral"]["segundo_leitor"]
+    itens = [i for i in ler_manifesto(gabarito / "manifesto.jsonl") if i.particao == "ajuste"]
+    origens = {i.origem for i in itens}
+    # O OCR sintético tem rótulos e valores: quase tudo ancora.
+    assert sl["taxa_ancoragem"] is not None and sl["taxa_ancoragem"] > 0.8
+    assert sl["ancorados_errados"] == 0  # o OCR nunca confirma o dígito trocado
+    if "sintetico:digito_trocado" in origens or "sintetico:duvidoso" in origens:
+        assert sl["releituras"] >= 1 and sl["corrigidos_pela_releitura"] >= 1
+        assert sl["concordancias"].get("2_DE_3", 0) >= 1
+        assert sl["taxa_ancoragem_efetiva"] >= sl["taxa_ancoragem"]
+    # Com o segundo leitor (sem as regras), nenhum erro escapa no sintético.
+    assert sl["criticos_aprovados"] > 0 and sl["erros_escapados"] == 0
+    assert m["geral"]["medicao"]["erros_escapados"] >= sl["erros_escapados"]
+    assert m["por"]["campo"]["cpf"]["segundo_leitor"]["campos_lidos_impressos"] > 0
+    assert m["escalada"]["fracao_do_custo_total"] is not None
+    texto = (pasta / "relatorio.md").read_text(encoding="utf-8")
+    assert "Segundo leitor" in texto and "Ancoragem por campo" in texto
+    assert "sint_" not in texto
+
+
+def test_campo_apagado_com_caixas_do_ocr(gabarito: Path, tmp_path: Path) -> None:
+    """Sem caixa no gabarito, o valor é localizado nas palavras do OCR."""
+    from app.providers.fake import FakeLeitorTexto
+
+    itens = [
+        i.model_copy(
+            update={
+                "campos": {n: v.model_copy(update={"caixa": None}) for n, v in i.campos.items()}
+            }
+        )
+        for i in ler_manifesto(gabarito / "manifesto.jsonl")[:6]
+    ]
+    leitor = FakeLeitorTexto(Settings(_env_file=None), gabarito / "gravacoes")
+    sem = asyncio.run(campo_apagado.gerar_variantes(itens, gabarito, tmp_path / "sem", ["apagar"]))
+    com = asyncio.run(
+        campo_apagado.gerar_variantes(
+            itens,
+            gabarito,
+            tmp_path / "com",
+            ["apagar"],
+            campo_apagado.LocalizadorValorPorOCR(leitor),
+        )
+    )
+    assert not sem.itens and sem.pulados_sem_caixa > 0
+    assert com.itens and com.pulados_sem_caixa < sem.pulados_sem_caixa

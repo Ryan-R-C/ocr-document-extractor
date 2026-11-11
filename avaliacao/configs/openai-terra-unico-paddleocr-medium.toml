@@ -1,0 +1,26 @@
+# Fase 2 · segundo leitor: OpenAI (gpt-6.1-terra, desenho único) + PaddleOCR em CPU (medium),
+# ancoragem e releitura com o gpt-6.1-sol. Compare com openai-terra-unico.toml (Fase 1).
+# Gabarito real fora do git: ajuste o caminho do manifesto. Holdout só para o número final.
+# Rodar: make avaliar CONFIG=avaliacao/configs/openai-terra-unico-paddleocr-medium.toml PARTICAO=ajuste
+nome = "openai-terra-unico-paddleocr-medium"
+gabarito = "../../gabarito/manifesto.jsonl"
+saida = "saidas/avaliacoes"
+modo = "padrao"
+concorrencia = 4
+
+[settings]
+leitor_visual_provider = "openai"
+leitor_visual_modelo = "gpt-6.1-terra"
+leitor_visual_modelo_escalada = "gpt-6.1-sol"
+leitor_visual_desenho = "unico"
+leitor_visual_detalhe = "original"
+leitor_visual_esforco_raciocinio = "none"
+leitor_texto_provider = "paddleocr"
+localizador_provider = "ocr"
+paddleocr_idioma = "pt"
+
+[campo_apagado]
+ativo = true
+metodos = ["borrar", "apagar"]
+# Sem caixa no gabarito, localiza o valor conferido nas palavras do PaddleOCR.
+usar_ocr_sem_caixa = true

@@ -317,6 +317,8 @@ def test_planejar_so_criticos_lidos() -> None:
     assert planejar(campos, ancorado, {"cpf": ResultadoDigitos.INVALIDO}) == {
         "cpf": Disparo.DIGITO_VERIFICADOR
     }
+    duvidoso = {"cpf": _campo("111.444.7?7-35", status=StatusLeitura.PARCIAL)}
+    assert planejar(duvidoso, ancorado, {}) == {"cpf": Disparo.LEITURA_PARCIAL}
     ilegivel = {"cpf": _campo("", status=StatusLeitura.ILEGIVEL)}
     assert planejar(ilegivel, {}, {}) == {}
 

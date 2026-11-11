@@ -11,6 +11,14 @@
 | Taxa de 422        | documentos recusados ÷ documentos, por motivo                             |
 | Custo por documento| média e p95, em R$                                                        |
 | Latência           | p50 e p95, total e por etapa                                              |
+
+Fase 2 (segundo leitor):
+| Taxa de ancoragem  | campos lidos pelo VLM (impressos) ANCORADOS no OCR ÷ campos lidos, antes  |
+|                    | da releitura; também o "efetivo" (depois da releitura com o OCR)          |
+| Ancoragem errada   | campo ancorado cujo valor está errado (o OCR confirmou um erro)           |
+| Taxa de releitura  | campos críticos relidos ÷ campos críticos lidos; documentos com releitura |
+| Custo da escalada  | custo das chamadas de releitura, por documento e fração do total          |
+| Modo segundo leitor| erro escapado aprovando todo crítico LEGIVEL e ancorado (sem as regras)   |
 """
 
 from __future__ import annotations
@@ -23,9 +31,10 @@ from operator import attrgetter
 from typing import Any
 
 from app.api.contrato import StatusDocumento
+from app.core import decisao
 from app.core.erros import FalhaExtracao
 from app.core.pipeline import ResultadoPipeline
-from app.schemas.campos import definicao
+from app.schemas.campos import Escrita, definicao
 from avaliacao.gabarito import ItemGabarito
 
 META_ERRO_ESCAPADO = 0.005
@@ -79,6 +88,7 @@ class RegistroDocumento:
     print_heuristica: bool | None = None
     sinalizacoes: tuple[str, ...] = ()
     chamadas: tuple[RegistroChamada, ...] = ()
+    custo_releitura_brl: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -97,10 +107,28 @@ class RegistroCampo:
     correto: bool | None  # None quando o gabarito não tem valor
     id: str = ""
     status_leitura: str | None = None
+    # Leitura do VLM principal, antes do segundo leitor (base do modo medição).
+    status_vlm: str | None = None
+    vlm_devolveu_valor: bool = False
+    correto_vlm: bool | None = None
+    manuscrito: bool = False
+    # Segundo leitor: ancoragem antes da releitura, ancoragem efetiva e a releitura.
+    ancoragem: str | None = None
+    ancoragem_efetiva: str | None = None
+    releitura: str | None = None  # None | EXECUTADA | NAO_EXECUTADA
+    concordancia: str | None = None
 
     @property
     def alucinacao(self) -> bool:
         return self.esperado_status != "LEGIVEL" and self.devolveu_valor
+
+    @property
+    def alucinacao_vlm(self) -> bool:
+        return self.esperado_status != "LEGIVEL" and self.vlm_devolveu_valor
+
+    @property
+    def lido_vlm(self) -> bool:
+        return self.status_vlm in ("LEGIVEL", "PARCIAL")
 
     @property
     def erro_escapado(self) -> bool:
@@ -112,11 +140,33 @@ class RegistroCampo:
     # segundo leitor nem regras. É o baseline das Fases 2 e 3.
     @property
     def aprovado_medicao(self) -> bool:
-        return self.status_leitura == "LEGIVEL"
+        return self.status_vlm == "LEGIVEL"
 
     @property
     def erro_escapado_medicao(self) -> bool:
-        return self.critico and self.aprovado_medicao and (self.alucinacao or self.correto is False)
+        return (
+            self.critico
+            and self.aprovado_medicao
+            and (self.alucinacao_vlm or self.correto_vlm is False)
+        )
+
+    # Modo segundo leitor: aprova todo crítico LEGIVEL com ancoragem efetiva (ou dupla
+    # leitura, no manuscrito), ignorando as regras (Fase 3). Mede o que o OCR segura.
+    @property
+    def aprovado_segundo_leitor(self) -> bool:
+        if self.status_leitura != "LEGIVEL":
+            return False
+        if self.manuscrito:
+            return self.concordancia == "2_DE_2"
+        return self.ancoragem_efetiva == "ANCORADO"
+
+    @property
+    def erro_escapado_segundo_leitor(self) -> bool:
+        return (
+            self.critico
+            and self.aprovado_segundo_leitor
+            and (self.alucinacao or self.correto is False)
+        )
 
 
 @dataclass
@@ -179,7 +229,13 @@ def registrar(registros: Registros, item: ItemGabarito, resultado: ResultadoPipe
                 for c in rastro.chamadas
                 if c.tokens_entrada or c.tokens_saida
             ),
+            custo_releitura_brl=sum(c.custo_brl for c in rastro.chamadas if c.etapa == "releitura"),
         )
+    )
+    preparados_vlm = (
+        decisao.preparar_campos(rastro.leitura_visual.subtipo, rastro.leitura_visual.campos)
+        if rastro.leitura_visual is not None
+        else {}
     )
     aprovado = resposta is not None and resposta.status is StatusDocumento.APROVADO
     for nome, esperado in item.campos.items():
@@ -188,9 +244,17 @@ def registrar(registros: Registros, item: ItemGabarito, resultado: ResultadoPipe
         devolvido = resposta.campos.get(nome) if resposta else None
         devolveu_valor = devolvido is not None and devolvido.valor is not None
         correto: bool | None = None
+        correto_vlm: bool | None = None
+        vlm = preparados_vlm.get(nome)
         if esperado.tem_valor:
             alvo = defn.normalizar(esperado.valor) or (esperado.valor or "").strip().upper()
             correto = devolvido is not None and devolvido.valor_normalizado == alvo
+            correto_vlm = vlm is not None and vlm.valor_normalizado == alvo
+        anc = rastro.ancoragens.get(nome)
+        rel = rastro.releituras.get(nome)
+        efetiva = anc.status.value if anc else None
+        if rel is not None and rel.ocr_concorda:
+            efetiva = "ANCORADO"
         registros.campos.append(
             RegistroCampo(
                 arquivo=item.arquivo,
@@ -207,6 +271,16 @@ def registrar(registros: Registros, item: ItemGabarito, resultado: ResultadoPipe
                 correto=correto,
                 id=item.sha256[:12],
                 status_leitura=devolvido.status_leitura.value if devolvido else None,
+                status_vlm=vlm.status_leitura.value if vlm else None,
+                vlm_devolveu_valor=vlm is not None and vlm.valor is not None,
+                correto_vlm=correto_vlm,
+                manuscrito=defn.escrita is Escrita.MANUSCRITO,
+                ancoragem=anc.status.value if anc else None,
+                ancoragem_efetiva=efetiva,
+                releitura=None
+                if rel is None
+                else ("EXECUTADA" if rel.executada else "NAO_EXECUTADA"),
+                concordancia=rel.concordancia if rel else None,
             )
         )
 
@@ -286,6 +360,7 @@ def _metricas_campos(campos: Sequence[RegistroCampo]) -> dict[str, Any]:
             sum(1 for c in com_valor if c.critico),
         ),
         "medicao": _metricas_medicao(campos),
+        "segundo_leitor": _segundo_leitor(campos),
     }
 
 
@@ -297,8 +372,55 @@ def _metricas_medicao(campos: Sequence[RegistroCampo]) -> dict[str, Any]:
         "criticos_aprovados": len(criticos),
         "erros_escapados": escapados,
         "taxa_erro_escapado": _taxa(escapados, len(criticos)),
-        "alucinacoes_criticos": sum(1 for c in criticos if c.alucinacao),
-        "alucinacoes": sum(1 for c in campos if c.aprovado_medicao and c.alucinacao),
+        "alucinacoes_criticos": sum(1 for c in criticos if c.alucinacao_vlm),
+        "alucinacoes": sum(1 for c in campos if c.aprovado_medicao and c.alucinacao_vlm),
+    }
+
+
+def _segundo_leitor(campos: Sequence[RegistroCampo]) -> dict[str, Any]:
+    """Ancoragem, releitura e o erro escapado com o segundo leitor (sem as regras)."""
+    impressos = [c for c in campos if c.lido_vlm and not c.manuscrito and c.ancoragem]
+    status = Counter(c.ancoragem for c in impressos)
+    efetivo = Counter(c.ancoragem_efetiva for c in impressos)
+    ancorados = [c for c in impressos if c.ancoragem_efetiva == "ANCORADO"]
+    criticos_lidos = [c for c in campos if c.critico and c.lido_vlm]
+    relidos = [c for c in criticos_lidos if c.releitura == "EXECUTADA"]
+    aprovados = [c for c in campos if c.critico and c.aprovado_segundo_leitor]
+    escapados = sum(1 for c in aprovados if c.erro_escapado_segundo_leitor)
+    return {
+        "campos_lidos_impressos": len(impressos),
+        "ancoragem": dict(status),
+        "taxa_ancoragem": _taxa(status["ANCORADO"], len(impressos)),
+        "taxa_ancoragem_criticos": _taxa(
+            sum(1 for c in impressos if c.critico and c.ancoragem == "ANCORADO"),
+            sum(1 for c in impressos if c.critico),
+        ),
+        "ancoragem_efetiva": dict(efetivo),
+        "taxa_ancoragem_efetiva": _taxa(efetivo["ANCORADO"], len(impressos)),
+        # O OCR confirmou um valor errado ou inventado: o pior caso do segundo leitor.
+        # Só com resposta 200 (documento recusado não devolve valor para comparar).
+        "ancorados_errados": sum(
+            1
+            for c in ancorados
+            if c.status_leitura is not None and (c.correto is False or c.alucinacao)
+        ),
+        "valor_certo_nao_ancorado": sum(
+            1 for c in impressos if c.correto is True and c.ancoragem_efetiva != "ANCORADO"
+        ),
+        "criticos_lidos": len(criticos_lidos),
+        "releituras": len(relidos),
+        "releituras_nao_executadas": sum(
+            1 for c in criticos_lidos if c.releitura == "NAO_EXECUTADA"
+        ),
+        "taxa_releitura": _taxa(len(relidos), len(criticos_lidos)),
+        "concordancias": dict(Counter(c.concordancia or "nenhuma" for c in relidos)),
+        "corrigidos_pela_releitura": sum(
+            1 for c in relidos if c.correto is True and c.correto_vlm is False
+        ),
+        "criticos_aprovados": len(aprovados),
+        "erros_escapados": escapados,
+        "taxa_erro_escapado": _taxa(escapados, len(aprovados)),
+        "alucinacoes_criticos": sum(1 for c in aprovados if c.alucinacao),
     }
 
 
@@ -487,11 +609,21 @@ def calcular(
         1 for c in apagados if c.alucinacao and c.aprovado_medicao
     )
     custo_plano = PLANO_CUSTO_BRL.get(referencia_plano) if referencia_plano else None
+    custo_total = sum(d.custo_brl for d in docs)
+    custo_releitura = [d.custo_releitura_brl for d in docs]
+    escalada = {
+        "documentos_com_releitura": sum(1 for v in custo_releitura if v > 0),
+        "taxa_documentos_com_releitura": _taxa(sum(1 for v in custo_releitura if v > 0), len(docs)),
+        "custo_medio_por_documento_brl": _media(custo_releitura),
+        "custo_total_brl": sum(custo_releitura),
+        "fracao_do_custo_total": (sum(custo_releitura) / custo_total) if custo_total else None,
+    }
     return {
         "geral": geral,
         "metas": metas,
         "por": por,
         "campo_apagado": campo_apagado,
+        "escalada": escalada,
         "captura": _captura(docs),
         "tokens": _tokens(docs),
         "custo_plano": {
@@ -499,7 +631,8 @@ def calcular(
             "plano_brl": custo_plano,
             "medido_medio_brl": geral["custo_brl"]["media"],
             "medido_p95_brl": geral["custo_brl"]["p95"],
-            "observacao": "o plano inclui escalada em 30% dos documentos; a Fase 1 não relê",
+            "observacao": "o plano inclui escalada em 30% dos documentos com dois campos "
+            "relidos; o medido inclui as releituras da Fase 2",
         },
         "piores_casos": _piores_casos(docs, campos),
         "erros_escapados": erros_escapados,

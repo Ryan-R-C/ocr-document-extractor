@@ -39,6 +39,7 @@ class Disparo(StrEnum):
     NAO_ANCORADO = "NAO_ANCORADO"
     ANCORAGEM_PARCIAL = "ANCORAGEM_PARCIAL"
     DIGITO_VERIFICADOR = "DIGITO_VERIFICADOR"
+    LEITURA_PARCIAL = "LEITURA_PARCIAL"  # o VLM marcou caractere duvidoso (`?`)
     MANUSCRITO = "MANUSCRITO"
 
 
@@ -97,6 +98,8 @@ def planejar(
             plano[nome] = Disparo.NAO_ANCORADO
         elif status is StatusAncoragem.PARCIAL:
             plano[nome] = Disparo.ANCORAGEM_PARCIAL
+        elif campo.status_leitura is StatusLeitura.PARCIAL:
+            plano[nome] = Disparo.LEITURA_PARCIAL
         elif digitos.get(nome) is ResultadoDigitos.INVALIDO:
             plano[nome] = Disparo.DIGITO_VERIFICADOR
     return plano
