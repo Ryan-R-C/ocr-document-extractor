@@ -1,0 +1,24 @@
+# Fase 1 · baseline com OpenAI, sem segundo leitor (nada é aprovado; vale o modo medição).
+# Gabarito real fora do git: ajuste o caminho do manifesto. Holdout só para o número final.
+# Rodar: make avaliar CONFIG=avaliacao/configs/openai-terra-duas-etapas.toml PARTICAO=ajuste
+#        (acrescente --modo batch ou --modo flex na linha do avaliar para pagar metade)
+nome = "openai-terra-duas-etapas"
+gabarito = "../../gabarito/manifesto.jsonl"
+saida = "saidas/avaliacoes"
+modo = "padrao"
+concorrencia = 4
+
+[settings]
+leitor_visual_provider = "openai"
+leitor_visual_modelo = "gpt-6.1-terra"
+leitor_visual_modelo_escalada = "gpt-6.1-sol"
+leitor_visual_desenho = "duas_etapas"
+leitor_visual_modelo_classificacao = "gpt-6-luna"
+leitor_visual_detalhe = "original"
+leitor_visual_esforco_raciocinio = "none"
+leitor_texto_provider = "nenhum"
+localizador_provider = "ocr"
+
+[campo_apagado]
+ativo = true
+metodos = ["borrar", "apagar"]

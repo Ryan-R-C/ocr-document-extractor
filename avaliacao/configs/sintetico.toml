@@ -1,0 +1,17 @@
+# Rodada de demonstração: gabarito sintético + providers fake (sem custo, sem dado real).
+# Gere antes com: make gabarito-sintetico
+nome = "sintetico-fake"
+gabarito = "../../dados/sintetico/manifesto.jsonl"
+saida = "saidas/avaliacoes"
+modo = "padrao"
+concorrencia = 4
+
+[settings]
+leitor_visual_provider = "fake"
+leitor_texto_provider = "fake"
+localizador_provider = "fake"
+fake_gravacoes_dir = "dados/sintetico/gravacoes"
+
+[campo_apagado]
+ativo = true
+metodos = ["borrar", "apagar"]
