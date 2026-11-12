@@ -64,15 +64,24 @@ pendentes; veja "Pendências".
 
 | Métrica | OCR fake | PaddleOCR medium |
 |---|---|---|
-| Aprovados / revisão / 422 | 21 / 11 / 6 | {PADDLE_DESFECHOS} |
-| Campos críticos aprovados | 82 | {PADDLE_CRITICOS} |
-| Erro escapado (críticos aprovados) | 0 (0%) | {PADDLE_ESCAPADO} |
-| Alucinação em crítico aprovado, incluindo o campo apagado | 0 | {PADDLE_ALUCINACAO} |
-| 422 por motivo | `CAMPO_CRITICO_ILEGIVEL` 10,5%, `LADO_SEM_DADOS` 5,3% | {PADDLE_422} |
-| Taxa de ancoragem (todos / críticos) | 97,3% / 98,7% | {PADDLE_ANCORAGEM} |
-| Releituras (críticos lidos) | 4/159 (2,5%), as 4 corrigidas por OCR + escalada | {PADDLE_RELEITURA} |
-| Erro escapado no modo medição (só o VLM) | 2/157 | {PADDLE_MEDICAO} |
+| Aprovados / revisão / 422 | 21 / 11 / 6 | 21 / 11 / 6 |
+| Campos críticos aprovados | 82 | 82 |
+| Erro escapado (críticos aprovados) | 0 (0%) | 0 (0%) |
+| Alucinação em crítico aprovado, incluindo o campo apagado | 0 | 0 (campo apagado: 0 de 72 variantes, na primeira rodada) |
+| 422 por motivo | `CAMPO_CRITICO_ILEGIVEL` 10,5%, `LADO_SEM_DADOS` 5,3% | igual |
+| Taxa de ancoragem (todos / críticos) | 97,3% / 98,7% | 97,3% / 98,7% |
+| Releituras (críticos lidos) | 4/159 (2,5%), as 4 corrigidas por OCR + escalada | igual |
+| Erro escapado no modo medição (só o VLM) | 2/157 | 2/157 |
 | Custo médio por documento | R$ 0,036 | igual |
+
+Sobre a coluna do PaddleOCR:
+- **Mesmos desfechos do OCR fake, documento a documento.** O OCR do PP-OCRv6 medium tem
+  latência p50 de 8,4 s e p95 de 11,5 s no host.
+- **A primeira rodada usou concorrência 4 com uma única instância do OCR.** As chamadas
+  ficaram na fila e estouraram o tempo limite de 30 s: 4 documentos e 11 variantes saíram
+  `ERRO_PROVIDER` (decisão 87: a concorrência precisa casar com `PADDLEOCR_INSTANCIAS`).
+  Mesmo assim, nenhuma das 72 variantes do campo apagado gerou alucinação.
+- **A segunda rodada, com concorrência 1 e sem as variantes, deu os números da tabela.**
 
 Por subtipo (OCR fake):
 
