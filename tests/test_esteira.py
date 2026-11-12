@@ -30,6 +30,7 @@ from app.providers.interfaces import (
     LeituraVisual,
     MetricasChamada,
     QualidadeCaptura,
+    Rotacao,
 )
 from app.regras.motor import ResultadoValidacao
 from app.schemas.campos import campos_do_subtipo, nomes_criticos
@@ -194,13 +195,14 @@ def test_classificacao() -> None:
         )
 
 
-# --- Esteira ponta a ponta com os stubs da Fase 0 -----------------------------------------
+# --- Esteira ponta a ponta com os stubs da Fase 3 (regras e dígitos) ---------------------
 
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("aprovar_nao_verificavel", [False, True])
 async def test_stubs_nunca_aprovam(settings, gravar, aprovar_nao_verificavel) -> None:
-    """Leitura perfeita do VLM e do OCR, até com NAO_VERIFICAVEL liberado: ainda REVISAO."""
+    """Leitura perfeita do VLM e do OCR (ancorada), até com NAO_VERIFICAVEL liberado: ainda
+    REVISAO, porque as regras são stub e devolvem REGRA_NAO_IMPLEMENTADA."""
     config = settings.model_copy(
         update={"aprovar_critico_nao_verificavel": aprovar_nao_verificavel}
     )
@@ -214,7 +216,7 @@ async def test_stubs_nunca_aprovam(settings, gravar, aprovar_nao_verificavel) ->
         )
         assert resultado.resposta is not None
         assert resultado.resposta.status is StatusDocumento.REVISAO
-        assert set(resultado.rastro.stubs) == {"ancoragem", "releitura", "regras"}
+        assert set(resultado.rastro.stubs) == {"regras", "digitos"}
 
 
 @pytest.mark.anyio
@@ -240,8 +242,10 @@ async def test_rastro_completo(settings, gravar) -> None:
     ):
         assert etapa in rastro.tempos_ms
     assert set(rastro.recortes) == {"cpf", "nome"}
-    assert set(rastro.releituras) == {"cpf", "nome"}  # não ancorados seriam relidos
-    assert not any(r.executada for r in rastro.releituras.values())
+    # cpf (crítico) ancorou; nome é informativo no cartão CPF: nada a reler.
+    assert rastro.ancoragens["cpf"].status.value == "ANCORADO"
+    assert rastro.ancoragens["nome"].status.value == "NAO_ANCORADO"
+    assert rastro.releituras == {}
     assert rastro.custo_brl == pytest.approx((3420 * 1 + 600 * 5) / 1e6 * 5.40)
     assert rastro.versao_pipeline.startswith("0.1.0+fake:gpt-6.1-terra+")
 
@@ -411,3 +415,152 @@ async def test_reprovacao_de_qualidade_e_422_sem_chamar_provider(settings, grava
     assert resultado.falha is not None
     assert "IMAGEM_DESFOCADA" in [m.codigo.value for m in resultado.falha.motivos]
     assert resultado.rastro.chamadas == []
+
+
+# --- Fase 2: releitura, manuscrito e regras ausentes na decisão ---------------------------
+
+
+def _resultado_releitura(**campos) -> ResultadoReleitura:
+    from app.core.releitura import Disparo
+
+    return ResultadoReleitura("cpf", executada=True, disparo=Disparo.ANCORAGEM_PARCIAL, **campos)
+
+
+def test_regra_nao_implementada_nunca_aprova() -> None:
+    leitura = _leitura(Subtipo.CPF_CARTAO, LIMPO)
+    preparados = decisao.preparar_campos(Subtipo.CPF_CARTAO, LIMPO)
+    validacao = ResultadoValidacao(
+        por_campo={"cpf": StatusValidacao.NAO_VERIFICAVEL},
+        motivos={"cpf": [MotivoCampo.REGRA_NAO_IMPLEMENTADA]},
+    )
+    ancoragens = {n: ResultadoAncoragem(n, StatusAncoragem.ANCORADO) for n in preparados}
+    resultado = decisao.decidir(leitura, preparados, ancoragens, {}, validacao, True)
+    assert resultado.status is StatusDocumento.REVISAO
+    assert "regra_nao_implementada" in resultado.bloqueios["cpf"]
+
+
+def test_releitura_com_ocr_vale_o_valor_da_concordancia() -> None:
+    errado = {"cpf": CampoLido(StatusLeitura.LEGIVEL, "CPF", "111.444.777-36")}
+    preparados = decisao.preparar_campos(Subtipo.CPF_CARTAO, errado)
+    releituras = {
+        "cpf": _resultado_releitura(
+            concordancia="2_DE_3",
+            leituras_concordantes=("ocr", "releitura"),
+            valor_final=CPF,
+            ocr_concorda=True,
+        )
+    }
+    finais = decisao.aplicar_releituras(preparados, releituras)
+    assert finais["cpf"].valor == CPF and finais["cpf"].valor_normalizado == "11144477735"
+    resultado = decisao.decidir(
+        _leitura(Subtipo.CPF_CARTAO, errado),
+        finais,
+        {"cpf": ResultadoAncoragem("cpf", StatusAncoragem.PARCIAL)},
+        releituras,
+        ResultadoValidacao(por_campo={"cpf": StatusValidacao.VALIDO}, motivos={}),
+        False,
+    )
+    assert resultado.status is StatusDocumento.APROVADO  # OCR confirmou o valor relido
+    assert resultado.campos["cpf"].valor == CPF
+
+
+def test_releitura_sem_ocr_nao_aprova_nem_troca_o_valor() -> None:
+    preparados = decisao.preparar_campos(Subtipo.CPF_CARTAO, LIMPO)
+    releituras = {
+        "cpf": _resultado_releitura(
+            concordancia="2_DE_3", leituras_concordantes=("vlm", "releitura"), valor_final=CPF
+        )
+    }
+    assert decisao.aplicar_releituras(preparados, releituras) == preparados
+    resultado = _decidir(LIMPO, ancoragem=StatusAncoragem.NAO_ANCORADO, releituras=releituras)
+    assert resultado.status is StatusDocumento.REVISAO
+    assert MotivoCampo.NAO_ANCORADO in resultado.campos["cpf"].motivos
+
+
+def test_leituras_divergentes_e_vlm_incompativel() -> None:
+    divergente = {"cpf": _resultado_releitura()}
+    resultado = _decidir(LIMPO, ancoragem=StatusAncoragem.PARCIAL, releituras=divergente)
+    assert MotivoCampo.LEITURAS_DIVERGENTES in resultado.campos["cpf"].motivos
+
+    letra = {"cpf": CampoLido(StatusLeitura.LEGIVEL, "CPF", "111.444.777-3S")}
+    leitura = _leitura(Subtipo.CPF_CARTAO, letra)
+    preparados = decisao.preparar_campos(Subtipo.CPF_CARTAO, letra)
+    resultado = decisao.decidir(
+        leitura,
+        preparados,
+        {"cpf": ResultadoAncoragem("cpf", StatusAncoragem.PARCIAL, vlm_incompativel=True)},
+        {},
+        ResultadoValidacao(por_campo={"cpf": StatusValidacao.VALIDO}, motivos={}),
+        False,
+    )
+    assert resultado.campos["cpf"].valor_normalizado is None
+    assert MotivoCampo.LEITURAS_DIVERGENTES in resultado.campos["cpf"].motivos
+
+
+@pytest.mark.anyio
+async def test_releitura_ponta_a_ponta_corrige_pelo_ocr(settings, gravar, monkeypatch) -> None:
+    """VLM erra um dígito; o OCR tem o valor certo; a releitura (escalada) concorda com o
+    OCR. O prompt da releitura não leva nenhum valor."""
+    from app.providers.fake import FakeLeitorVisual
+
+    certo = cpf_sintetico(3)
+    ultimo = str((int(certo[-1]) + 1) % 10)
+    errado = certo[:-1] + ultimo
+    gravacao = gravacao_cpf(certo)
+    gravacao.leitura_visual.campos["cpf"].texto_literal = errado
+    gravacao = gravacao.model_validate(
+        {
+            **gravacao.model_dump(mode="json"),
+            "releituras": {
+                "cpf": {
+                    "status": "LEGIVEL",
+                    "rotulo_visto": "CPF",
+                    "texto_literal": certo,
+                    "modelo": "gpt-6.1-sol",
+                    "tokens_entrada": 500,
+                    "tokens_saida": 30,
+                }
+            },
+        }
+    )
+    conteudo = imagem_png(140)
+    gravar(conteudo, gravacao)
+    pedidos = []
+    original = FakeLeitorVisual.ler
+
+    async def espiar(self, pedido):
+        pedidos.append(pedido)
+        return await original(self, pedido)
+
+    monkeypatch.setattr(FakeLeitorVisual, "ler", espiar)
+    config = settings.model_copy(update={"localizador_provider": "ocr"})
+    resultado = await criar_esteira(config).processar(
+        "id", RequisicaoExtracao(tipo_documento=TipoDocumento.CPF, imagem_base64=b64(conteudo))
+    )
+    rastro = resultado.rastro
+    assert rastro.ancoragens["cpf"].status is StatusAncoragem.PARCIAL  # um dígito
+    rel = rastro.releituras["cpf"]
+    assert rel.executada and rel.leituras_concordantes == ("ocr", "releitura")
+    assert resultado.resposta is not None
+    assert resultado.resposta.campos["cpf"].valor == certo
+    assert resultado.resposta.status is StatusDocumento.REVISAO  # regras ainda stub
+    releitura = next(p for p in pedidos if p.etapa.value == "releitura")
+    assert releitura.modelo == "gpt-6.1-sol" and releitura.campo == "cpf"
+    assert certo not in releitura.prompt and errado not in releitura.prompt
+    assert releitura.imagem.altura >= config.releitura_altura_min_px
+    assert "releitura" in {c.etapa for c in rastro.chamadas}
+    assert rastro.custo_brl > (3420 * 1 + 600 * 5) / 1e6 * 5.40  # inclui a escalada
+
+
+@pytest.mark.anyio
+async def test_documento_girado_relido_pelo_ocr_de_pe(settings, gravar) -> None:
+    conteudo = imagem_png(150)
+    gravacao = gravacao_cpf(cpf_sintetico(4))
+    gravacao.leitura_visual.rotacao = Rotacao.GRAUS_90
+    gravar(conteudo, gravacao)
+    resultado = await criar_esteira(settings).processar(
+        "id", RequisicaoExtracao(tipo_documento=TipoDocumento.CPF, imagem_base64=b64(conteudo))
+    )
+    rastro = resultado.rastro
+    assert rastro.leitura_texto_antes_de_girar is not None
+    assert [c.etapa for c in rastro.chamadas].count("leitura_texto") == 2

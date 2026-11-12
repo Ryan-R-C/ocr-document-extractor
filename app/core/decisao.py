@@ -2,9 +2,9 @@
 
 Invariante 1 do CLAUDE.md: nenhum campo crítico é aprovado sem leitura LEGIVEL do VLM,
 ancoragem no OCR e validação sem falha. Campo manuscrito crítico exige duas leituras de
-modelos diferentes concordando. Este módulo é código real desde a Fase 0; o que ainda é
-stub (ancoragem, regras) chega aqui como "não ancorado"/"não verificável" e, portanto,
-nunca resulta em APROVADO.
+modelos diferentes concordando (no lugar da ancoragem, que o OCR não faz em manuscrito).
+Este módulo é código real desde a Fase 0. O motor de regras ainda é stub (Fase 3) e chega
+aqui como "não verificável": sem ele, nada resulta em APROVADO.
 """
 
 from __future__ import annotations
@@ -99,6 +99,27 @@ def preparar_campos(subtipo: Subtipo, lidos: dict[str, CampoLido]) -> dict[str, 
     return preparados
 
 
+def aplicar_releituras(
+    preparados: dict[str, CampoPreparado], releituras: dict[str, ResultadoReleitura]
+) -> dict[str, CampoPreparado]:
+    """Campo com concordância que inclui o OCR (ou dupla leitura, no manuscrito) passa a
+    valer o valor da concordância, normalizado de novo. O resto fica como estava."""
+    finais = dict(preparados)
+    for nome, r in releituras.items():
+        prep = preparados.get(nome)
+        if prep is None or r.valor_final is None:
+            continue
+        if not (r.ocr_concorda or r.dupla_leitura):
+            continue
+        normalizado = prep.definicao.normalizar(r.valor_final)
+        if normalizado is None:
+            continue
+        finais[nome] = CampoPreparado(
+            prep.definicao, StatusLeitura.LEGIVEL, r.valor_final, normalizado
+        )
+    return finais
+
+
 def _falha_sem_criticos(preparados: dict[str, CampoPreparado]) -> FalhaExtracao | None:
     criticos = [p for p in preparados.values() if p.definicao.critico]
     if not criticos or any(p.status_leitura in _LIDOS for p in criticos):
@@ -136,20 +157,25 @@ def decidir(
     for nome, prep in preparados.items():
         motivos = list(prep.motivos)
         ancoragem = ancoragens.get(nome)
+        releitura = releituras.get(nome)
+        manuscrito = prep.definicao.escrita is Escrita.MANUSCRITO
         status_anc = ancoragem.status if ancoragem else StatusAncoragem.NAO_ANCORADO
-        if prep.status_leitura in _LIDOS:
+        if releitura is not None and releitura.ocr_concorda:
+            # O OCR confirma o valor que saiu da votação da releitura.
+            status_anc = StatusAncoragem.ANCORADO
+        if prep.status_leitura in _LIDOS and not manuscrito:
             if status_anc is StatusAncoragem.NAO_ANCORADO:
                 motivos.append(MotivoCampo.NAO_ANCORADO)
             elif status_anc is StatusAncoragem.PARCIAL:
                 motivos.append(MotivoCampo.ANCORAGEM_PARCIAL)
-        releitura = releituras.get(nome)
-        if releitura and releitura.executada and releitura.concordancia is None:
+        vlm_incompativel = bool(ancoragem and ancoragem.vlm_incompativel)
+        divergentes = bool(releitura and releitura.executada and releitura.concordancia is None)
+        if (vlm_incompativel and not (releitura and releitura.ocr_concorda)) or divergentes:
             motivos.append(MotivoCampo.LEITURAS_DIVERGENTES)
         validacao_campo = validacao.por_campo.get(nome, StatusValidacao.NAO_VERIFICAVEL)
         motivos.extend(validacao.motivos.get(nome, []))
 
-        dupla_leitura = bool(releitura and releitura.executada and releitura.concordancia)
-        manuscrito = prep.definicao.escrita is Escrita.MANUSCRITO
+        dupla_leitura = bool(releitura and releitura.dupla_leitura)
         if prep.definicao.critico and manuscrito and not dupla_leitura:
             motivos.append(MotivoCampo.MANUSCRITO_SEM_DUPLA_LEITURA)
 
@@ -159,10 +185,13 @@ def decidir(
                 razoes.append(f"leitura_{prep.status_leitura.value.lower()}")
             if prep.valor_normalizado is None:
                 razoes.append("sem_valor_normalizado")
-            if status_anc is not StatusAncoragem.ANCORADO:
+            if not manuscrito and status_anc is not StatusAncoragem.ANCORADO:
                 razoes.append(f"ancoragem_{status_anc.value.lower()}")
             if validacao_campo not in validos:
                 razoes.append(f"validacao_{validacao_campo.value.lower()}")
+            if MotivoCampo.REGRA_NAO_IMPLEMENTADA in validacao.motivos.get(nome, []):
+                # Regra ausente nunca conta como validação, nem com NAO_VERIFICAVEL liberado.
+                razoes.append("regra_nao_implementada")
             if manuscrito and not dupla_leitura:
                 razoes.append("manuscrito_sem_dupla_leitura")
             bloqueios[nome] = razoes

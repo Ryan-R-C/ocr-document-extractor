@@ -17,7 +17,8 @@ dependencies = [
     "pillow>=13,<14",
     "pillow-heif>=1.8,<2",
     "pypdfium2>=5.14,<6",
-    "opencv-python-headless>=4.12,<5",
+    # Não headless: o PaddleX confere este nome de pacote ao importar os módulos de OCR.
+    "opencv-contrib-python>=4.10,<5",
     "openai>=3.44,<4",
     "numpy>=2",
 ]
@@ -27,6 +28,15 @@ avaliar = "avaliacao.cli:main_avaliar"
 gabarito = "avaliacao.cli:main_gabarito"
 comparar = "avaliacao.cli:main_comparar"
 limpeza = "app.armazenamento.limpeza:main"
+medir-ocr = "avaliacao.medir_ocr:main"
+revisao = "avaliacao.revisao:main"
+trabalhador = "app.trabalhador:main"
+
+[project.optional-dependencies]
+ocr = [
+    "paddleocr>=3.7,<4",
+    "paddlepaddle>=3.3,<4",
+]
 
 [dependency-groups]
 dev = [
@@ -67,7 +77,7 @@ plugins = ["pydantic.mypy"]
 exclude = ["migrations/"]
 
 [[tool.mypy.overrides]]
-module = ["boto3.*", "botocore.*", "moto.*", "pypdfium2.*", "pillow_heif.*", "jsonschema.*", "referencing.*"]
+module = ["boto3.*", "botocore.*", "moto.*", "pypdfium2.*", "pillow_heif.*", "jsonschema.*", "referencing.*", "paddleocr.*", "paddle.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
@@ -80,9 +90,10 @@ warn_return_any = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-ra --strict-markers -m 'not provider_real and not integracao'"
+addopts = "-ra --strict-markers -m 'not provider_real and not integracao and not ocr_real'"
 markers = [
     "provider_real: chama provider real (nunca roda por padrão)",
+    "ocr_real: roda o PaddleOCR de verdade (precisa do extra `ocr` e dos pesos)",
     "integracao: depende de Postgres e S3 reais (make test-integracao)",
 ]
 filterwarnings = [
@@ -91,3 +102,4 @@ filterwarnings = [
     # Aviso do starlette sobre o httpx usado pelo TestClient; não afeta o serviço.
     "ignore:Using `httpx` with `starlette.testclient`",
 ]
+

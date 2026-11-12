@@ -51,7 +51,7 @@ uv run gabarito importar-csv --csv gabarito.csv --imagens <dir> --saida <dir>/ma
 uv run gabarito particionar  --manifesto <dir>/manifesto.jsonl
 uv run gabarito validar      --manifesto <dir>/manifesto.jsonl
 uv run gabarito estratificar --manifesto <dir>/manifesto.jsonl --saida saidas/estratificacao
-uv run gabarito apagar-campos --manifesto <dir>/manifesto.jsonl --saida saidas/variantes
+uv run gabarito apagar-campos --manifesto <dir>/manifesto.jsonl --saida saidas/variantes [--ocr]
 uv run avaliar --config <rodada.toml> --particao ajuste
 ```
 
@@ -65,4 +65,23 @@ existente estiver em outro formato, basta escrever outro leitor para o mesmo man
 Para cada item, um campo crítico com valor (escolhido pelo hash; configurável) é borrado
 (`ILEGIVEL`) ou apagado com a cor do fundo (`AUSENTE`). Qualquer valor devolvido nesse
 campo é alucinação. Sem `caixa` no gabarito, o `LocalizadorValorPorOCR` procura o valor
-conferido nas palavras do OCR configurado (pronto para o PaddleOCR da Fase 2).
+conferido nas palavras do OCR configurado (PaddleOCR): `--ocr` no comando, ou
+`usar_ocr_sem_caixa = true` na seção `[campo_apagado]` da rodada.
+
+## Casos em revisão viram gabarito
+
+Os casos que a esteira mandou para revisão são conferidos por uma pessoa e entram no
+gabarito, na partição de ajuste por padrão, com `origem = "revisao:<id_caso>"`.
+
+```bash
+uv run revisao exportar --destino saidas/revisao
+uv run revisao importar --caso saidas/revisao/<id_caso> --gabarito <dir_gabarito>
+```
+
+`exportar` grava, por caso pendente, a imagem recebida, os recortes, `leituras.json` (o que
+a esteira leu) e `correcao.json`, um modelo em branco. Quem confere preenche `qualidade` e,
+em cada campo, `status` (`LEGIVEL`, `AUSENTE` ou `ILEGIVEL`) e `valor` (só em `LEGIVEL`),
+corrigindo `subtipo`, `uf` e `lado` se preciso. `importar` valida, confere o sha256 da
+imagem, copia para `imagens/revisao/`, acrescenta ao manifesto e marca o caso como
+`CONFERIDO` (`--sem-banco` pula essa marcação; `--particao holdout` só com motivo). A pasta
+exportada tem dados pessoais: fica fora do git e é apagada depois da conferência.

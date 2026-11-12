@@ -103,3 +103,13 @@ class LeitorTextoComposto:
 
     async def ler(self, imagem: Imagem) -> LeituraTexto:
         return await _chamar(lambda: self.principal.ler(imagem), self.timeout_s, None)
+
+    @property
+    def modelo(self) -> str | None:
+        return getattr(self.principal, "modelo", None)
+
+    def aquecer(self) -> None:
+        """Carrega o modelo antes da primeira requisição, se o adaptador souber fazer isso."""
+        aquecer = getattr(self.principal, "aquecer", None)
+        if callable(aquecer):
+            aquecer()

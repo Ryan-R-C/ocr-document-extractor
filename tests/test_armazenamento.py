@@ -55,13 +55,16 @@ def test_pacote_de_auditoria_completo(cliente, gravar, objetos, repositorio) -> 
     assert manifesto["leitura_visual"]["metricas"]["tokens_entrada"] == 3420
     assert manifesto["leitura_visual"]["metricas"]["custo_brl"] > 0
     assert manifesto["leitura_texto"]["resposta_bruta"]["palavras"]
-    assert manifesto["ancoragens"]["cpf"]["status"] == "NAO_ANCORADO"
-    assert manifesto["releituras"]["cpf"]["executada"] is False
+    # O OCR gravado tem o rótulo e o valor do CPF: ancora; nada a reler.
+    assert manifesto["ancoragens"]["cpf"]["status"] == "ANCORADO"
+    assert manifesto["ancoragens"]["cpf"]["palavras_ids"] == [1]
+    assert manifesto["ancoragens"]["cpf"]["rotulo_ids"] == [0]
+    assert manifesto["releituras"] == {}
     assert manifesto["regras"]["aplicadas"][0]["id"] == "stub.nao_implementada"
     assert manifesto["regras"]["aplicadas"][0]["versao"]
     assert manifesto["decisao"]["status"] == "REVISAO"
     assert manifesto["recebido_em"] and manifesto["concluido_em"]
-    assert set(manifesto["stubs_ativos"]) == {"ancoragem", "releitura", "regras"}
+    assert set(manifesto["stubs_ativos"]) == {"regras", "digitos"}
 
     processamento = repositorio.obter(id_proc)
     assert processamento.sha256_imagem == sha

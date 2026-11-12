@@ -9,7 +9,7 @@ concorrencia = 4
 [settings]
 leitor_visual_provider = "fake"
 leitor_texto_provider = "fake"
-localizador_provider = "fake"
+localizador_provider = "ocr"
 fake_gravacoes_dir = "dados/sintetico/gravacoes"
 
 [campo_apagado]

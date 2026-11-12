@@ -244,3 +244,194 @@ não travar a fase, mas precisa do seu aval.
     nome do arquivo, que pode conter dado pessoal.
 58. **Comparação do custo com o plano:** a tabela do plano inclui escalada em 30% dos
     documentos, e a Fase 1 não relê. O relatório mostra os dois números lado a lado.
+
+## 2026-11-11 · Fase 2
+
+O plano da Fase 2 foi apresentado com quatro dúvidas. A ordem para seguir veio sem
+resposta a elas; as quatro foram decididas pela proposta do plano e estão marcadas
+**[confirmar]**.
+
+### Dúvidas do plano
+
+59. **[confirmar] Ancoragem PARCIAL:** o valor aparece no OCR fora da região do rótulo, ou
+    sem rótulo encontrado, ou com diferença de um único caractere (edição) dentro da
+    região num valor com pelo menos `ANCORAGEM_PARCIAL_TAMANHO_MIN` (8) caracteres. Um
+    caractere de diferença fora da região é `NAO_ANCORADO`. *Descartado:* tratar qualquer
+    aparição do valor como ANCORADO (o valor de outro campo, em outro lugar, confirmaria o
+    errado).
+60. **[confirmar] Branch:** a Fase 2 foi feita em `claude/charming-ride-4iq73l`, sem tocar
+    em `app/regras/`. A Fase 3 vai para outra sessão e outra branch; a interface comum está
+    na decisão 70.
+61. **[confirmar] Medição só sintética:** sem gabarito real, a taxa de ancoragem medida é
+    do gabarito sintético (com o OCR fake e com o PaddleOCR real). Tempo e memória do OCR
+    foram medidos no container.
+62. **[confirmar] Pesos do PaddleOCR dentro da imagem Docker** (baixados no build, em
+    `/opt/paddlex`, só leitura para o usuário da aplicação): o container sobe sem rede e
+    sem esperar download. A imagem passou de 438 MB para 2,73 GB. *Descartado:* volume
+    baixado na primeira execução (a primeira requisição pagaria o download e o container
+    precisaria de acesso ao Hugging Face).
+
+### PaddleOCR
+
+63. **PaddleOCR 3.7.0 + PaddlePaddle 3.3.1 (CPU) como extra `ocr`** (`uv sync --extra
+    ocr`). Os testes não precisam dele: o adaptador importa o pacote só ao criar o motor.
+    Conferido na versão instalada: `PaddleOCR(lang="pt")` escolhe PP-OCRv6 medium
+    (detecção e reconhecimento latino) e baixa os pesos do Hugging Face.
+64. **`opencv-contrib-python` no lugar do `opencv-python-headless`.** O PaddleX confere o
+    nome desse pacote (`importlib.metadata`) ao importar os módulos de OCR, então o headless
+    não serve, e os dois juntos brigam pelo mesmo módulo `cv2`. Versão travada pelo
+    PaddleX (4.10.0.84). A imagem Docker ganhou `libgl1` e `libglib2.0-0`.
+    *Descartado:* excluir o pacote com override do uv (o PaddleX recusa o OCR) e enganar a
+    checagem de dependências (frágil, API privada).
+65. **oneDNN (MKLDNN) desligado** (`PADDLEOCR_MKLDNN=false`): no Paddle 3.3.1 em CPU a
+    inferência falha com `ConvertPirAttribute2RuntimeAttribute`, inclusive com
+    `FLAGS_enable_pir_api=0`. Reavaliar a cada versão do Paddle: é o que mais pesa na
+    latência.
+66. **Palavras a partir de `return_word_box=True`:** o PaddleOCR devolve fragmentos por
+    linha (palavras, espaços e pontuação) com caixa; fragmentos sem espaço entre si viram
+    uma palavra (`01`, `/`, `02` → `01/02`). Id = ordem de leitura. Sem caixas por
+    palavra, a linha é dividida proporcionalmente ao número de caracteres. *Descartado* (do
+    plano): sempre dividir proporcionalmente.
+67. **Uma instância do modelo por thread** num pool próprio (`PADDLEOCR_INSTANCIAS`,
+    padrão 1, ~1,3 GB cada), com aquecimento no startup (`LEITOR_TEXTO_AQUECER`). Escala
+    horizontal por container. Orientação do documento, retificação e orientação de linha
+    do PaddleOCR ficam desligadas: a esteira já recorta e gira.
+68. **Modelo padrão PP-OCRv6 medium; mobile como alternativa em configuração.** Medido no
+    container (4 CPUs, 12 cartões sintéticos de 1100 × 720): medium p50 11,3 s, p95 16,1 s,
+    pico 1,46 GB; PP-OCRv5 mobile (latino) p50 5,2 s, p95 8,8 s, pico 0,82 GB. A escolha
+    sai da taxa de ancoragem no gabarito real.
+69. **Desenho único com documento girado: o OCR roda de novo na imagem de pé.** O OCR de
+    um documento deitado não serve (texto mal lido e caixas em outra orientação). Custa uma
+    segunda leitura de OCR só nesses casos; a primeira fica na auditoria. *Descartado* (do
+    plano): girar as caixas das palavras.
+
+### Interface com a Fase 3
+
+70. **Dígitos verificadores:** `app/core/digitos.py` define o `Protocol`
+    `ChecadorDigitos(tipo_valor, valor_normalizado) -> VALIDO | INVALIDO | NAO_APLICAVEL`.
+    A Fase 3 entrega a função em `app/regras/digitos.py`, sem nunca corrigir o valor; a
+    esteira a recebe no construtor (`Esteira(..., checar_digitos=...)`). Até a integração
+    no portão 2+3, `checar_pendente` devolve `NAO_APLICAVEL` e aparece em `stubs_ativos`.
+71. **Regra não implementada nunca aprova.** Com `APROVAR_CRITICO_NAO_VERIFICAVEL=true`, o
+    `NAO_VERIFICAVEL` do stub de regras contaria como validado e, com a ancoragem real,
+    aprovaria documento sem regra nenhuma. A decisão agora bloqueia todo campo crítico com
+    `REGRA_NAO_IMPLEMENTADA`, qualquer que seja a configuração.
+
+### Ancoragem
+
+72. **Comparação por chave:** maiúsculas, sem acento, só letras e dígitos (espaço e
+    pontuação ignorados). Acento e cedilha também são ignorados, porque o OCR erra os dois
+    (`EXPEDIÇÃO` lido como `EXPEDIO`). `?` do VLM casa com qualquer caractere.
+73. **Confusões do OCR por tipo do campo** (pares letra-dígito em `ANCORAGEM_CONFUSOES`):
+    em campo numérico (CPF, data, dígitos), a letra do OCR conta como o dígito; em texto,
+    UF e categoria, o dígito do OCR conta como a letra; em alfanumérico (RG, série da CTPS,
+    CNPJ), os dois sentidos. Só o texto do OCR é tolerado; o do VLM nunca muda.
+74. **VLM com caractere incompatível com o tipo** (letra num CPF): ancoragem `PARCIAL` com
+    `vlm_incompativel`, motivo `LEITURAS_DIVERGENTES` e `valor_normalizado` nulo. A busca
+    no OCR continua, só para localizar o campo para a releitura.
+75. **Rótulo reconhecido por semelhança** (`ANCORAGEM_ROTULO_SIMILARIDADE_MIN` = 0,8 sobre a
+    chave), entre o `rotulo_visto` do VLM e os rótulos da definição do campo. Rótulo
+    colado no valor na mesma palavra (`CPF:123…`) conta como dentro da região.
+76. **Região em alturas do rótulo, configurável por subtipo** (`ANCORAGEM_REGIOES`): à
+    direita na mesma linha até 25 alturas; abaixo até 3 alturas, com folga horizontal de 8.
+    Valores provisórios, a calibrar no gabarito real.
+77. **Campo sem rótulo impresso** (MRZ) nunca fica `ANCORADO`: no máximo `PARCIAL` (sem
+    rótulo). Hoje todos são informativos.
+78. **Manuscrito não passa pela ancoragem** (`NAO_APLICAVEL`): precisa de VLM principal e
+    releitura, de modelos diferentes, concordando. A releitura de manuscrito crítico é
+    sempre disparada. Hoje nenhum manuscrito é crítico.
+
+### Releitura
+
+79. **Disparo:** campo crítico lido (`LEGIVEL` ou `PARCIAL`) com ancoragem `NAO_ANCORADO`
+    ou `PARCIAL`, com leitura `PARCIAL` (caractere duvidoso), com dígito verificador
+    inválido ou manuscrito. Campo crítico `ILEGIVEL` ou `AUSENTE` não é relido (não há o
+    que localizar). O prompt diz o nome do campo e os rótulos usuais, nunca valor.
+80. **Votação** depois da normalização (código):
+    - VLM = releitura e o OCR confirma um dos dois → `3_DE_3`, aprovável;
+    - OCR confirma a releitura, VLM diferente → `2_DE_3`, vale o valor da releitura;
+    - OCR confirma o VLM, releitura diferente → `2_DE_3`, vale o VLM;
+    - VLM = releitura sem o OCR → `2_DE_3` sem OCR: fica em revisão (decisão em aberto do
+      CLAUDE.md);
+    - nada concorda → `LEITURAS_DIVERGENTES`.
+
+    "O OCR confirma" usa o mesmo critério da ancoragem (exato, na região do rótulo). As
+    regras rodam depois da releitura, sobre o valor final, sem novo ciclo.
+81. **Recorte da releitura:** caixa do localizador com margem (`RELEITURA_MARGEM`, mínimo em
+    px), ampliado até `RELEITURA_ALTURA_MIN_PX` (até 4×). O mesmo recorte vai para a
+    auditoria.
+82. **Falha na releitura não derruba o documento:** erro do provider, tempo esgotado ou
+    resposta fora do schema deixam o campo sem releitura (e em revisão), com o motivo na
+    auditoria.
+83. **Localizador por OCR:** caixa da evidência da ancoragem; sem ela, a região do rótulo
+    (à direita e abaixo); sem rótulo, sem caixa (o campo vai para revisão sem releitura).
+
+### Casos em revisão e avaliação
+
+84. **Casos em revisão por linha de comando** (`uv run revisao exportar|importar`). O modelo
+    de correção vem com os valores em branco, para não induzir quem confere; as leituras
+    ficam ao lado, em `leituras.json`. A importação confere o sha256 da imagem, recusa
+    imagem repetida, grava com origem `revisao:<id_caso>` na partição de ajuste (padrão) e
+    marca o caso como `CONFERIDO`. Erros de validação não ecoam valores.
+85. **O modo medição passa a usar a leitura do VLM principal** (antes do segundo leitor),
+    para continuar sendo o baseline da Fase 1. Novo "modo segundo leitor": aprova todo
+    crítico `LEGIVEL` com ancoragem efetiva, sem as regras.
+86. **Gabarito sintético** com os rótulos nas palavras do OCR, um caso de confusão O/0 e
+    releituras gravadas (modelo de escalada) nos casos de dígito trocado e caractere
+    duvidoso. As configurações sintéticas usam o localizador por OCR.
+87. **Fila do OCR conta para o tempo limite:** com uma instância por processo, requisições
+    simultâneas esperam o modelo, e a espera entra no `PROVIDER_TIMEOUT_S`. Em produção,
+    concorrência por container ≈ `PADDLEOCR_INSTANCIAS`, ou o modo assíncrono.
+
+## 2026-11-12 · Modo assíncrono (fora da sequência de fases, na mesma branch)
+
+Pedido para diminuir a latência percebida e controlar a concorrência no OCR. Plano
+aprovado com as sugestões para as cinco dúvidas.
+
+88. **Modo assíncrono entra já** (resolve a decisão em aberto sobre o tempo de resposta do
+    chamador):
+    - `POST /v1/extracoes/assincronas` responde 202 com `id_processamento`, `situacao`,
+      `url_consulta` (também no header `Location`), `posicao_fila` e `Retry-After`;
+    - `GET /v1/extracoes/{id}` responde 202 enquanto não conclui; concluída, devolve o
+      mesmo corpo e o mesmo código HTTP do síncrono; id desconhecido ou expirado dá 404
+      `NAO_ENCONTRADO`/`EXTRACAO_NAO_ENCONTRADA`.
+
+    *Descartado:* `Prefer: respond-async` no mesmo endpoint (contrato menos explícito).
+89. **O síncrono fica, desligado por padrão** (`EXTRACAO_SINCRONA=false`; 404
+    `MODO_SINCRONO_DESLIGADO`). O `.env.example` liga para uso local. Com ele desligado, a
+    API não carrega o OCR: sobe em segundos e usa ~110 MB.
+90. **Só consulta (polling), sem webhook** por enquanto.
+91. **Fila no próprio Postgres** (`tarefas_extracao`, `SELECT … FOR UPDATE SKIP LOCKED`).
+    A imagem fica no S3 em `fila/<id>/`, criptografada, e é apagada ao concluir; o
+    resultado fica no pacote de auditoria, como no síncrono. Nenhuma coluna guarda valor de
+    campo; o corpo de erro gerado pela própria fila não tem dado pessoal. *Descartado:*
+    Redis/SQS (infraestrutura nova).
+92. **Erros de requisição continuam síncronos** (400/413 no POST). O cache vale nos dois
+    modos: documento já processado responde 202 `CONCLUIDA` e a consulta devolve o
+    resultado na hora.
+93. **Trabalhador** (`uv run trabalhador`, serviço no compose):
+    - concorrência = `TRABALHADOR_CONCORRENCIA` (padrão: `PADDLEOCR_INSTANCIAS`), para a
+      fila do OCR nunca estourar o tempo limite (decisão 87);
+    - escala horizontal com mais containers;
+    - aquece o OCR antes da primeira tarefa e para de forma limpa em SIGTERM.
+94. **Falhas na fila:**
+    - erro transitório (502/504) volta para a fila com espera crescente
+      (`FILA_ESPERA_INICIAL_S` × 2ⁿ, até `FILA_ESPERA_MAX_S`) até `FILA_TENTATIVAS_MAX`;
+      depois disso, o 502/504 é o resultado;
+    - trabalhador que morre: a reserva (`FILA_RESERVA_S`) vence e outro retoma; reservada
+      mais vezes que o limite, a tarefa termina com 500 `ERRO_INTERNO` (protege contra uma
+      imagem que derruba o processo);
+    - falha ao gravar o pacote de auditoria também dá 500 na consulta (não há resultado
+      gravado para devolver);
+    - o custo das tentativas devolvidas vai só para o log (`tarefa_devolvida`).
+95. **TTL:** a tarefa expira com o TTL dos artefatos contado da chegada; o processamento
+    também conta da chegada, não do início no trabalhador. A limpeza apaga tarefas vencidas
+    e a imagem da fila; o lifecycle de 2 dias em `fila/` é só rede de segurança.
+96. **O 422 automático do FastAPI sai do OpenAPI:** a validação vira 400 pelo handler, e
+    aquele 422 nunca acontece.
+97. **OCR: medium continua o padrão.** O mobile perde de 3 a 5 pontos de ancoragem no
+    sintético em todas as variações (condição combinada: só trocar sem perda). O limite da
+    detecção (`PADDLEOCR_DET_LADO_MAX`) existe e fica desligado. Medido isolado no container,
+    com cartões de 1100 px: em 960 px o p50 cai de 10,2 para 9,2 s e o pico de memória de
+    1,46 para 1,24 GB, sem perda de ancoragem; em 640 px a ancoragem cai 1 ponto. Em foto
+    real (~1600 px após o recorte) o ganho tende a ser maior; decide-se no gabarito real.

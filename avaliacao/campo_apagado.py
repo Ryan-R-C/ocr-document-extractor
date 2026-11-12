@@ -3,7 +3,7 @@ ou apagado digitalmente. A resposta certa é AUSENTE ou ILEGIVEL; qualquer valor
 nesse campo conta como alucinação.
 
 Caixa do campo: a do gabarito, quando existe. Sem ela, um `LocalizadorDeValor` encontra o
-valor conferido nas palavras do OCR (Fase 2: PaddleOCR). Sem caixa nem localizador, o campo
+valor conferido nas palavras do OCR (PaddleOCR desde a Fase 2). Sem caixa nem localizador, o campo
 é pulado e contado no relatório. Os arquivos originais nunca são alterados.
 """
 
@@ -12,7 +12,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import io
-import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -20,6 +19,7 @@ from typing import Literal, Protocol
 
 from PIL import Image, ImageFilter, ImageOps, ImageStat
 
+from app.core.ancoragem import chave
 from app.providers.interfaces import Caixa, Imagem, LeitorTexto, Palavra
 from avaliacao.gabarito import ItemGabarito, ValorGabarito
 
@@ -36,7 +36,8 @@ class LocalizadorDeValor(Protocol):
 
 
 def _chave(texto: str) -> str:
-    return re.sub(r"[^0-9A-Z]", "", texto.upper())
+    # Mesma normalização da ancoragem: sem acento, só letras e dígitos.
+    return chave(texto)
 
 
 class LocalizadorValorPorOCR:

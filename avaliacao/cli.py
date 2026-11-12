@@ -85,6 +85,11 @@ def main_gabarito(argv: list[str] | None = None) -> int:
     p.add_argument("--manifesto", type=Path, required=True)
     p.add_argument("--saida", type=Path, required=True)
     p.add_argument("--metodo", action="append", choices=["borrar", "apagar"])
+    p.add_argument(
+        "--ocr",
+        action="store_true",
+        help="sem caixa no gabarito, localiza o valor com o leitor de texto configurado",
+    )
 
     args = parser.parse_args(argv)
 
@@ -128,9 +133,20 @@ def main_gabarito(argv: list[str] | None = None) -> int:
         )
     elif args.comando == "apagar-campos":
         itens = ler_manifesto(args.manifesto)
+        localizador = None
+        if args.ocr:
+            from app.config import obter_settings
+            from app.providers.fabrica import criar_dependencias
+
+            leitor = criar_dependencias(obter_settings()).leitor_texto
+            localizador = campo_apagado.LocalizadorValorPorOCR(leitor)
         resultado = asyncio.run(
             campo_apagado.gerar_variantes(
-                itens, args.manifesto.parent, args.saida, args.metodo or ["borrar", "apagar"]
+                itens,
+                args.manifesto.parent,
+                args.saida,
+                args.metodo or ["borrar", "apagar"],
+                localizador,
             )
         )
         escrever_manifesto(args.saida / "manifesto.jsonl", resultado.itens)

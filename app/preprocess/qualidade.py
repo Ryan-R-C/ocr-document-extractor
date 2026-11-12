@@ -69,7 +69,7 @@ def medir_reflexo(cinza: NDArray[np.uint8]) -> float:
         mancha = (rotulos == indice).astype(np.uint8)
         contornos, _ = cv2.findContours(mancha, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         preenchida = np.zeros_like(mancha)
-        cv2.drawContours(preenchida, contornos, -1, 1, thickness=cv2.FILLED)
+        cv2.drawContours(preenchida, contornos, -1, (1,), thickness=cv2.FILLED)
         if area / max(1, int(preenchida.sum())) < 0.95:
             continue  # tem buracos (texto): é fundo claro, não brilho
         anel = cv2.dilate(mancha, nucleo) - mancha

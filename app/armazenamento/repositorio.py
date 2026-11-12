@@ -108,3 +108,27 @@ class Repositorio:
             objeto = sessao.get(CasoRevisao, id_caso)
             if objeto is not None:
                 sessao.delete(objeto)
+
+    def casos_pendentes(self, agora: datetime, limite: int = 100) -> list[CasoRevisao]:
+        """Casos em REVISAO ainda não conferidos e não expirados, do mais antigo ao mais novo."""
+        with self.sessoes() as sessao:
+            consulta = (
+                select(CasoRevisao)
+                .where(CasoRevisao.situacao == "PENDENTE")
+                .where(or_(CasoRevisao.expira_em.is_(None), CasoRevisao.expira_em > agora))
+                .order_by(CasoRevisao.criado_em)
+                .limit(limite)
+            )
+            return list(sessao.scalars(consulta))
+
+    def obter_caso(self, id_caso: str) -> CasoRevisao | None:
+        with self.sessoes() as sessao:
+            return sessao.get(CasoRevisao, id_caso)
+
+    def marcar_conferido(self, id_caso: str, quando: datetime) -> None:
+        with self.sessoes.begin() as sessao:
+            caso = sessao.get(CasoRevisao, id_caso)
+            if caso is None:
+                raise KeyError(id_caso)
+            caso.situacao = "CONFERIDO"
+            caso.conferido_em = quando

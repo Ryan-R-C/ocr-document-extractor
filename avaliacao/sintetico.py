@@ -6,7 +6,9 @@ sílabas sem sentido e cartões sem layout de documento oficial.
 
 Comportamentos gravados (determinísticos pela semente) para exercitar as métricas:
 leitura exata, campo crítico ilegível, caractere duvidoso, dígito trocado, alucinação em
-campo ausente e frente sem dados (LADO_SEM_DADOS).
+campo ausente, confusão do OCR (letra no lugar de dígito) e frente sem dados
+(LADO_SEM_DADOS). O OCR gravado tem rótulos e valores; nos casos de dígito trocado e de
+caractere duvidoso, a releitura gravada (modelo de escalada) traz o valor desenhado.
 """
 
 from __future__ import annotations
@@ -28,6 +30,7 @@ from app.providers.fake.gravacoes import (
     LeituraTextoGravada,
     LeituraVisualGravada,
     PalavraGravada,
+    ReleituraGravada,
 )
 from app.providers.interfaces import QualidadeCaptura
 from app.schemas.campos import SUBTIPOS_POR_TIPO, DefinicaoCampo, campos_do_subtipo
@@ -139,7 +142,21 @@ def _desenhar(
         coluna, linha = divmod(posicao, 8)
         x, y = 40 + coluna * 540, 110 + linha * 75
         rotulo_txt = defn.rotulos[0] if defn.rotulos else defn.nome.upper()
-        desenho.text((x, y), rotulo_txt, fill=(90, 90, 90), font=rotulo)
+        cursor_rotulo = float(x)
+        for parte in rotulo_txt.split(" "):
+            esq, topo, dir_, base = (
+                int(v) for v in desenho.textbbox((cursor_rotulo, y), parte, font=rotulo)
+            )
+            desenho.text((cursor_rotulo, y), parte, fill=(90, 90, 90), font=rotulo)
+            palavras.append(
+                PalavraGravada(
+                    id=len(palavras),
+                    texto=parte,
+                    caixa=(esq, topo, max(1, dir_ - esq), max(1, base - topo)),
+                    confianca=0.95,
+                )
+            )
+            cursor_rotulo = dir_ + desenho.textlength(" ", font=rotulo)
         valor = valores.get(defn.nome)
         if valor is None:
             continue
@@ -193,8 +210,10 @@ def _desenhar(
 
 def _comportamento(rng: random.Random) -> str:
     sorteio = rng.random()
-    if sorteio < 0.62:
+    if sorteio < 0.56:
         return "exato"
+    if sorteio < 0.62:
+        return "ocr_confusao"
     if sorteio < 0.74:
         return "critico_ilegivel"
     if sorteio < 0.84:
@@ -284,11 +303,32 @@ def gerar(
             lidos[alvo] = lidos[alvo].model_copy(
                 update={"texto_literal": _trocar_digito(valores[alvo])}
             )
+        elif comportamento == "ocr_confusao" and alvo and "0" in valores[alvo]:
+            # O OCR lê O no lugar de 0: a ancoragem tolera em campo numérico.
+            palavras_ocr = [
+                p.model_copy(update={"texto": p.texto.replace("0", "O")})
+                if p.texto in valores[alvo].split(" ")
+                else p
+                for p in desenho.palavras
+            ]
+            desenho = _Desenho(desenho.imagem, desenho.caixas, palavras_ocr)
         elif comportamento == "alucina_ausente" and ausentes:
             inventado = rng.choice(ausentes)
             defn = next(d for d in definicoes if d.nome == inventado)
             lidos[inventado] = CampoGravado(
                 status=StatusLeitura.LEGIVEL, rotulo_visto="", texto_literal=_valor(rng, defn, uf)
+            )
+
+        releituras: dict[str, ReleituraGravada] = {}
+        if comportamento in ("digito_trocado", "duvidoso") and alvo:
+            releituras[alvo] = ReleituraGravada(
+                status=StatusLeitura.LEGIVEL,
+                rotulo_visto=lidos[alvo].rotulo_visto,
+                texto_literal=valores[alvo],
+                modelo="gpt-6.1-sol",
+                tokens_entrada=900,
+                tokens_saida=40,
+                latencia_ms=round(700 + rng.random() * 600, 1),
             )
 
         gravacao = Gravacao(
@@ -311,6 +351,7 @@ def gerar(
                 palavras=desenho.palavras, latencia_ms=round(300 + rng.random() * 500, 1)
             ),
             caixas=desenho.caixas,
+            releituras=releituras,
         )
         gravacoes.salvar(dir_gravacoes, sha, gravacao)
         itens.append(

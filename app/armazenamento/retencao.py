@@ -12,6 +12,8 @@ from datetime import datetime, timedelta
 from app.config import Settings
 
 PREFIXO_REVISAO = "revisao"
+# Imagens aguardando o trabalhador (modo assíncrono); apagadas ao concluir a tarefa.
+PREFIXO_FILA = "fila"
 
 
 def prefixo_artefatos(ttl: timedelta | None) -> str:
@@ -27,6 +29,10 @@ def prefixo_pacote(settings: Settings, id_processamento: str) -> str:
 
 def prefixo_caso_revisao(id_caso: str) -> str:
     return f"{PREFIXO_REVISAO}/{id_caso}"
+
+
+def chave_imagem_fila(id_processamento: str, extensao: str) -> str:
+    return f"{PREFIXO_FILA}/{id_processamento}/imagem_recebida.{extensao}"
 
 
 def expira_em(inicio: datetime, ttl: timedelta | None) -> datetime | None:
@@ -45,6 +51,14 @@ def regras_lifecycle(settings: Settings) -> list[dict[str, object]]:
                 "Expiration": {"Days": 1},
             }
         )
+    regras.append(
+        {
+            "ID": "seguranca-fila",
+            "Filter": {"Prefix": f"{PREFIXO_FILA}/"},
+            "Status": "Enabled",
+            "Expiration": {"Days": 2},
+        }
+    )
     ttl_revisao = settings.ttl_casos_revisao
     if ttl_revisao is not None:
         dias = max(1, math.ceil(ttl_revisao.total_seconds() / 86400)) + 1

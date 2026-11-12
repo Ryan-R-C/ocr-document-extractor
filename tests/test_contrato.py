@@ -50,10 +50,25 @@ def test_exemplos_embutidos_no_openapi_validam(documento: dict[str, Any]) -> Non
 
 def test_rota_documenta_todos_os_codigos(documento: dict[str, Any]) -> None:
     respostas = documento["paths"]["/v1/extracoes"]["post"]["responses"]
-    assert set(respostas) == {"200", "400", "413", "422", "500", "502", "504"}
-    for codigo in ("400", "413", "422", "500", "502", "504"):
+    assert set(respostas) == {"200", "400", "404", "413", "422", "500", "502", "504"}
+    for codigo in ("400", "404", "413", "422", "500", "502", "504"):
         ref = respostas[codigo]["content"]["application/json"]["schema"]["$ref"]
         assert ref.endswith("/RespostaErro")
+
+
+def test_rotas_assincronas_documentadas(documento: dict[str, Any]) -> None:
+    def ref(respostas: dict[str, Any], codigo: str) -> str:
+        return str(respostas[codigo]["content"]["application/json"]["schema"]["$ref"])
+
+    post = documento["paths"]["/v1/extracoes/assincronas"]["post"]["responses"]
+    assert set(post) == {"202", "400", "413", "422", "500"} - {"422"}
+    assert ref(post, "202").endswith("/RespostaAceita")
+    get = documento["paths"]["/v1/extracoes/{id_processamento}"]["get"]["responses"]
+    assert set(get) == {"200", "202", "404", "422", "500", "502", "504"}
+    assert ref(get, "200").endswith("/RespostaExtracao")
+    assert ref(get, "202").endswith("/RespostaAceita")
+    for codigo in ("404", "422", "500", "502", "504"):
+        assert ref(get, codigo).endswith("/RespostaErro")
 
 
 def test_enums_do_plano(documento: dict[str, Any]) -> None:

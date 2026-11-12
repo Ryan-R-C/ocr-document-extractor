@@ -4,6 +4,8 @@
 - `casos_revisao`: registro próprio dos casos em REVISAO, com TTL próprio.
 - `chamadas_provider`: custo por chamada; sem dado pessoal, sobrevive à expiração do
   processamento para o histórico de custo (por isso sem chave estrangeira).
+- `tarefas_extracao`: fila do modo assíncrono. A imagem fica no armazenamento de objetos
+  (criptografada); o resultado, no pacote de auditoria. Aqui só ficam situação e prazos.
 """
 
 from __future__ import annotations
@@ -11,7 +13,7 @@ from __future__ import annotations
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import DateTime, Index, Integer, Numeric, String
+from sqlalchemy import DateTime, Index, Integer, Numeric, String, Text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -77,3 +79,32 @@ class ChamadaProvider(Base):
     sucesso: Mapped[int] = mapped_column(Integer)
     erro: Mapped[str | None] = mapped_column(String(200))
     criado_em: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+
+class TarefaExtracao(Base):
+    __tablename__ = "tarefas_extracao"
+
+    # Mesmo id do processamento: a consulta usa um id só.
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    id_externo: Mapped[str | None] = mapped_column(String(200))
+    tipo_documento: Mapped[str] = mapped_column(String(40))
+    sha256_imagem: Mapped[str] = mapped_column(String(64))
+    formato: Mapped[str] = mapped_column(String(10))
+    chave_imagem: Mapped[str] = mapped_column(String(200))
+    # PENDENTE | PROCESSANDO | CONCLUIDA
+    situacao: Mapped[str] = mapped_column(String(15))
+    tentativas: Mapped[int] = mapped_column(Integer, default=0)
+    # A partir de quando pode ser reservada (espera crescente entre tentativas).
+    disponivel_em: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    # Fim da reserva: se o trabalhador cair, a tarefa volta para a fila depois disso.
+    prazo_em: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    trabalhador: Mapped[str | None] = mapped_column(String(100))
+    criado_em: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    iniciado_em: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    concluido_em: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    http_status: Mapped[int | None] = mapped_column(Integer)
+    # Só corpo de erro gerado pela fila (sem dado pessoal); o resultado fica no pacote.
+    corpo_erro: Mapped[str | None] = mapped_column(Text)
+    expira_em: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+
+    __table_args__ = (Index("ix_tarefas_fila", "situacao", "disponivel_em", "criado_em"),)
