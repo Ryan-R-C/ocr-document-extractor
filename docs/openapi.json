@@ -115,7 +115,10 @@
           "DATA_INCOERENTE",
           "CARACTERE_DUVIDOSO",
           "MANUSCRITO_SEM_DUPLA_LEITURA",
-          "REGRA_NAO_IMPLEMENTADA"
+          "REGRA_NAO_IMPLEMENTADA",
+          "VALIDACAO_INDISPONIVEL",
+          "VALOR_INCOERENTE",
+          "FORA_DA_TABELA"
         ],
         "title": "MotivoCampo",
         "type": "string"
@@ -136,6 +139,7 @@
           "DOCUMENTO_CORTADO",
           "REFLEXO_EXCESSIVO",
           "CAMPO_CRITICO_ILEGIVEL",
+          "CAMPO_CRITICO_AUSENTE",
           "PROVIDER_INDISPONIVEL",
           "TEMPO_ESGOTADO",
           "ERRO_INTERNO"

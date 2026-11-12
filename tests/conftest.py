@@ -89,6 +89,12 @@ def gravacao_cpf(cpf: str, nome: str = NOME_SINTETICO, **extra: Any) -> Gravacao
     return Gravacao.model_validate(dados)
 
 
+def gravacao_cpf_em_revisao(cpf: str, **extra: Any) -> Gravacao:
+    """Cartão CPF que vai para REVISAO: o OCR vê o rótulo, mas não o número (não ancora)."""
+    sem_valor = {"palavras": [{"id": 0, "texto": "CPF", "caixa": [20, 100, 40, 20]}]}
+    return gravacao_cpf(cpf, **{"leitura_texto": sem_valor, **extra})
+
+
 @pytest.fixture
 def dir_gravacoes(tmp_path: Path) -> Path:
     destino = tmp_path / "gravacoes"

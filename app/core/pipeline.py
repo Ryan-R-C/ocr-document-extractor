@@ -23,20 +23,21 @@ from typing import Any
 from PIL import Image as PILImage
 
 from app.api.contrato import (
+    UF,
     Documento,
     MotivoErro,
     RequisicaoExtracao,
     RespostaExtracao,
+    StatusLeitura,
     Subtipo,
     TipoDocumento,
 )
 from app.config import Settings
 from app.core import ancoragem as mod_ancoragem
 from app.core import decisao as mod_decisao
-from app.core import digitos as mod_digitos
 from app.core import releitura as mod_releitura
 from app.core.ancoragem import ParametrosAncoragem, ResultadoAncoragem
-from app.core.decisao import Decisao
+from app.core.decisao import CampoPreparado, Decisao
 from app.core.digitos import ChecadorDigitos, ResultadoDigitos
 from app.core.erros import (
     FalhaArquivoGrande,
@@ -70,6 +71,8 @@ from app.providers.interfaces import (
     TempoEsgotadoProvider,
 )
 from app.regras import motor
+from app.regras.base import Parametros
+from app.regras.digitos import checar_digitos as checar_digitos_regras
 from app.regras.motor import ResultadoValidacao
 from app.schemas import respostas
 from app.schemas.campos import (
@@ -147,11 +150,34 @@ def _stubs_ativos() -> list[str]:
         stubs.append("ancoragem")
     if not mod_releitura.IMPLEMENTADO:
         stubs.append("releitura")
-    if not mod_digitos.IMPLEMENTADO:
-        stubs.append("digitos")
     if not motor.IMPLEMENTADO:
         stubs.append("regras")
     return stubs
+
+
+def _uf_documento(preparados: dict[str, CampoPreparado], uf_leitura: UF | None) -> UF | None:
+    """UF impressa no próprio documento; na falta dela, a classificada pelo VLM."""
+    for nome in ("uf_emissao", "uf_ctps"):
+        prep = preparados.get(nome)
+        if (
+            prep is not None
+            and prep.status_leitura is StatusLeitura.LEGIVEL
+            and prep.valor_normalizado
+        ):
+            return UF(prep.valor_normalizado)
+    return uf_leitura if uf_leitura is not UF.NAO_IDENTIFICADO else None
+
+
+def parametros_regras(settings: Settings) -> Parametros:
+    return Parametros(
+        ano_minimo=settings.regras_ano_minimo,
+        idade_min=settings.regras_idade_min,
+        idade_max=settings.regras_idade_max,
+        idade_min_admissao=settings.regras_idade_min_admissao,
+        cin_validade_tolerancia_dias=settings.regras_cin_validade_tolerancia_dias,
+        cnh_validade_tolerancia_dias=settings.regras_cnh_validade_tolerancia_dias,
+        moeda_transicao_dias=settings.regras_moeda_transicao_dias,
+    )
 
 
 def _girar(imagem: Imagem, rotacao: Rotacao) -> Imagem:
@@ -200,11 +226,11 @@ class Esteira:
         self,
         settings: Settings,
         dependencias: Dependencias,
-        checar_digitos: ChecadorDigitos = mod_digitos.checar_pendente,
+        checar_digitos: ChecadorDigitos = checar_digitos_regras,
     ) -> None:
         self.settings = settings
         self.deps = dependencias
-        # Interface com a Fase 3 (app/regras/digitos.py), integrada no portão 2+3.
+        # app/regras/digitos.py (Fase 3); injetável para testes.
         self.checar_digitos = checar_digitos
 
     @property
@@ -323,9 +349,10 @@ class Esteira:
                 recortes[nome] = await asyncio.to_thread(recortar, imagem, caixa, settings)
             rastro.recortes = {nome: r.conteudo for nome, r in recortes.items()}
 
-        # Dígitos verificadores (Fase 3): só dizem se confere; nunca corrigem.
+        # Dígitos verificadores: só dizem se confere; nunca corrigem (invariante 4).
+        uf_documento = _uf_documento(preparados, leitura_visual.uf)
         rastro.digitos = {
-            nome: self.checar_digitos(p.definicao.tipo_valor, p.valor_normalizado)
+            nome: self.checar_digitos(p.definicao, p.valor_normalizado, uf_documento)
             for nome, p in preparados.items()
             if p.definicao.critico and p.valor_normalizado is not None
         }
@@ -362,7 +389,11 @@ class Esteira:
         # 6. Regras (de novo, sobre os valores depois da releitura) e decisão
         with rastro.cronometro("regras"):
             rastro.validacao = motor.validar(
-                subtipo, {n: p.entrada_regra() for n, p in preparados.items()}
+                subtipo,
+                {n: p.entrada_regra() for n, p in preparados.items()},
+                data_processamento=settings.data_processamento(),
+                parametros=parametros_regras(settings),
+                uf_leitura=leitura_visual.uf,
             )
         captura = rastro.captura
         with rastro.cronometro("decisao"):
@@ -373,6 +404,7 @@ class Esteira:
                 rastro.releituras,
                 rastro.validacao,
                 aprovar_nao_verificavel=settings.aprovar_critico_nao_verificavel,
+                critico_ausente_422=settings.critico_ausente == "422",
                 sinalizacoes_captura=mod_decisao.sinalizacoes_de_captura(
                     leitura_visual,
                     captura.copia_reprografica if captura else False,

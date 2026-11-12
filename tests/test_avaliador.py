@@ -12,7 +12,7 @@ import pytest
 from app.api.contrato import StatusLeitura
 from app.config import Settings
 from app.providers.fake import gravacoes
-from app.providers.fake.gravacoes import CampoGravado
+from app.providers.fake.gravacoes import CampoGravado, PalavraGravada
 from avaliacao import campo_apagado, estratificacao, metricas, sintetico
 from avaliacao.cli import main_avaliar, main_gabarito
 from avaliacao.executor import ConfigAvaliacao, ModoNaoImplementado, avaliar
@@ -58,13 +58,14 @@ def test_avaliador_ponta_a_ponta(gabarito: Path, tmp_path: Path) -> None:
     execucao, m = relatorio["execucao"], relatorio["metricas"]
     assert execucao["itens"] == len(itens)
     assert execucao["variantes"] > 0
-    assert set(execucao["stubs_ativos"]) == {"regras", "digitos"}
+    assert execucao["stubs_ativos"] == []
 
     geral = m["geral"]
     assert geral["documentos"] == len(itens)
-    # Stubs: nada aprovado, logo nenhum erro escapado possível.
-    assert geral["desfechos"].get("APROVADO", 0) == 0
-    assert geral["criticos_aprovados"] == 0
+    # Com as regras da Fase 3 a esteira aprova, e nenhum erro escapa no sintético.
+    assert geral["desfechos"].get("APROVADO", 0) > 0
+    assert geral["criticos_aprovados"] > 0
+    assert geral["erros_escapados"] == 0
     assert m["metas"]["alucinacao_criticos_aprovados"]["atingida"] is True
     # Custo do fake: 3420 tokens de entrada e 600 de saída no gpt-6.1-terra; a releitura
     # (900/40 no gpt-6.1-sol) soma só nos documentos relidos.
@@ -113,17 +114,31 @@ def test_avaliador_detecta_alucinacao_no_campo_apagado(gabarito: Path, tmp_path:
             texto_literal=original.campos[variante.campo_apagado].valor or "",
         )
         lv = gravacao.leitura_visual.model_copy(update={"campos": campos})
+        # O OCR da variante não vê o que foi apagado: tira as palavras dentro da caixa.
+        caixa = original.campos[variante.campo_apagado].caixa
+        assert caixa and gravacao.leitura_texto
+        x, y, w, h = caixa
+
+        def dentro(p: PalavraGravada) -> bool:
+            cx, cy = p.caixa[0] + p.caixa[2] / 2, p.caixa[1] + p.caixa[3] / 2
+            return x <= cx <= x + w and y <= cy <= y + h
+
+        lt = gravacao.leitura_texto.model_copy(
+            update={"palavras": [p for p in gravacao.leitura_texto.palavras if not dentro(p)]}
+        )
+        assert len(lt.palavras) < len(gravacao.leitura_texto.palavras)
         gravacoes.salvar(
             gabarito / "gravacoes",
             variante.sha256,
-            gravacao.model_copy(update={"leitura_visual": lv}),
+            gravacao.model_copy(update={"leitura_visual": lv, "leitura_texto": lt}),
         )
 
     config.campo_apagado.metodos = ["borrar"]
     relatorio, _ = asyncio.run(avaliar(config, "ajuste", settings=_settings(config)))
     ca = relatorio["metricas"]["campo_apagado"]
     assert ca["alucinacoes"] >= len(previa.itens)
-    assert ca["alucinacoes_em_aprovados"] == 0  # stubs não aprovam
+    # O OCR não ancora o campo apagado: a alucinação do VLM nunca chega a APROVADO.
+    assert ca["alucinacoes_em_aprovados"] == 0
 
 
 def test_variantes_sao_deterministicas_e_nao_tocam_originais(
@@ -190,9 +205,8 @@ def test_modo_medicao_e_secoes_da_fase_1(gabarito: Path, tmp_path: Path) -> None
     m = relatorio["metricas"]
     itens = [i for i in ler_manifesto(gabarito / "manifesto.jsonl") if i.particao == "ajuste"]
     medicao = m["geral"]["medicao"]
-    # Sem segundo leitor nada é aprovado, mas a medição aprova todo LEGIVEL.
-    assert m["geral"]["criticos_aprovados"] == 0
-    assert medicao["criticos_aprovados"] > 0
+    # A medição aprova todo LEGIVEL; a esteira, só o que passa nas três condições.
+    assert 0 < m["geral"]["criticos_aprovados"] < medicao["criticos_aprovados"]
     # A medição usa a leitura do VLM principal: o dígito trocado escapa nela, mesmo que a
     # releitura o corrija depois.
     if any(i.origem == "sintetico:digito_trocado" for i in itens):

@@ -292,7 +292,7 @@ def test_sucesso_e_cabecalho_de_contrato(cliente, gravar) -> None:
     assert resposta.status_code == 200
     corpo = resposta.json()
     uuid.UUID(corpo["id_processamento"])
-    assert corpo["status"] == "REVISAO"
+    assert corpo["status"] == "APROVADO"
     assert corpo["documento"] == {"subtipo": "CPF_CARTAO", "uf": "SP", "lado": "FRENTE"}
 
 

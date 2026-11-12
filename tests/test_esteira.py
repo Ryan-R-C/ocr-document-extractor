@@ -22,6 +22,7 @@ from app.api.contrato import (
 )
 from app.core import decisao
 from app.core.ancoragem import ResultadoAncoragem, StatusAncoragem
+from app.core.digitos import ResultadoDigitos
 from app.core.erros import FalhaExtracao
 from app.core.releitura import ResultadoReleitura
 from app.montagem import criar_esteira
@@ -34,7 +35,7 @@ from app.providers.interfaces import (
 )
 from app.regras.motor import ResultadoValidacao
 from app.schemas.campos import campos_do_subtipo, nomes_criticos
-from tests.conftest import b64, cpf_sintetico, gravacao_cpf, imagem_png
+from tests.conftest import b64, cpf_sintetico, gravacao_cpf, gravacao_cpf_em_revisao, imagem_png
 
 
 def _leitura(
@@ -59,6 +60,7 @@ def _decidir(
     aprovar_nao_verificavel: bool = False,
     subtipo: Subtipo = Subtipo.CPF_CARTAO,
     releituras: dict[str, ResultadoReleitura] | None = None,
+    critico_ausente_422: bool = False,
 ):
     leitura = _leitura(subtipo, campos)
     preparados = decisao.preparar_campos(subtipo, campos)
@@ -73,6 +75,7 @@ def _decidir(
         releituras or {},
         resultado_validacao,
         aprovar_nao_verificavel,
+        critico_ausente_422=critico_ausente_422,
     )
 
 
@@ -160,6 +163,48 @@ def test_critico_ausente_com_outros_lidos_vai_para_revisao() -> None:
     assert resultado.bloqueios["nome"]
 
 
+def test_critico_ausente_vira_422_so_com_configuracao() -> None:
+    subtipo = Subtipo.RG_ANTIGO
+    campos = {
+        n: CampoLido(StatusLeitura.LEGIVEL, "", "01/02/2010" if "data" in n else "SP")
+        for n in nomes_criticos(subtipo)
+    }
+    campos["nome"] = CampoLido(StatusLeitura.AUSENTE, "", "")
+    with pytest.raises(FalhaExtracao) as erro:
+        _decidir(campos, subtipo=subtipo, critico_ausente_422=True)
+    assert [(m.codigo.value, m.campo) for m in erro.value.motivos] == [
+        ("CAMPO_CRITICO_AUSENTE", "nome")
+    ]
+
+
+def test_algum_critico_ilegivel_e_422_mesmo_com_outros_lidos() -> None:
+    subtipo = Subtipo.RG_ANTIGO
+    campos = {
+        n: CampoLido(StatusLeitura.LEGIVEL, "", "01/02/2010" if "data" in n else "SP")
+        for n in nomes_criticos(subtipo)
+    }
+    campos["nome"] = CampoLido(StatusLeitura.ILEGIVEL, "", "")
+    campos["data_expedicao"] = CampoLido(StatusLeitura.AUSENTE, "", "")
+    with pytest.raises(FalhaExtracao) as erro:
+        _decidir(campos, subtipo=subtipo)
+    assert [(m.codigo.value, m.campo) for m in erro.value.motivos] == [
+        ("CAMPO_CRITICO_ILEGIVEL", "nome")
+    ]
+
+
+def test_ctps_digital_numero_e_serie_derivados_do_cpf() -> None:
+    campos = {"cpf": CampoLido(StatusLeitura.LEGIVEL, "CPF", CPF)}
+    resultado = _decidir(campos, subtipo=Subtipo.CTPS_DIGITAL)
+    assert resultado.campos["numero_ctps"].valor == "1114447"
+    assert resultado.campos["serie_ctps"].valor == "7735"
+    assert resultado.campos["serie_ctps"].status_validacao is StatusValidacao.VALIDO
+    assert "numero_ctps" not in resultado.bloqueios  # informativo: não decide nada
+    duvidoso = {"cpf": CampoLido(StatusLeitura.PARCIAL, "CPF", "111.444.777-3?")}
+    resultado = _decidir(duvidoso, subtipo=Subtipo.CTPS_DIGITAL)
+    assert resultado.campos["numero_ctps"].valor is None
+    assert resultado.campos["numero_ctps"].status_leitura is StatusLeitura.ILEGIVEL
+
+
 def test_todos_criticos_ausentes_e_lado_sem_dados() -> None:
     subtipo = Subtipo.RG_ANTIGO
     campos = {n: CampoLido(StatusLeitura.AUSENTE, "", "") for n in nomes_criticos(subtipo)}
@@ -195,18 +240,13 @@ def test_classificacao() -> None:
         )
 
 
-# --- Esteira ponta a ponta com os stubs da Fase 3 (regras e dígitos) ---------------------
+# --- Esteira ponta a ponta com as regras da Fase 3 -----------------------------------------
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("aprovar_nao_verificavel", [False, True])
-async def test_stubs_nunca_aprovam(settings, gravar, aprovar_nao_verificavel) -> None:
-    """Leitura perfeita do VLM e do OCR (ancorada), até com NAO_VERIFICAVEL liberado: ainda
-    REVISAO, porque as regras são stub e devolvem REGRA_NAO_IMPLEMENTADA."""
-    config = settings.model_copy(
-        update={"aprovar_critico_nao_verificavel": aprovar_nao_verificavel}
-    )
-    esteira = criar_esteira(config)
+async def test_leitura_perfeita_com_dv_valido_aprova(settings, gravar) -> None:
+    """VLM LEGIVEL, OCR ancorado e dígito verificador válido: as três condições."""
+    esteira = criar_esteira(settings)
     for semente in range(5):
         conteudo = imagem_png(100 + semente)
         gravar(conteudo, gravacao_cpf(cpf_sintetico(semente)))
@@ -215,8 +255,42 @@ async def test_stubs_nunca_aprovam(settings, gravar, aprovar_nao_verificavel) ->
             RequisicaoExtracao(tipo_documento=TipoDocumento.CPF, imagem_base64=b64(conteudo)),
         )
         assert resultado.resposta is not None
-        assert resultado.resposta.status is StatusDocumento.REVISAO
-        assert set(resultado.rastro.stubs) == {"regras", "digitos"}
+        assert resultado.resposta.status is StatusDocumento.APROVADO
+        assert resultado.resposta.campos["cpf"].status_validacao is StatusValidacao.VALIDO
+        assert resultado.rastro.stubs == []
+        assert resultado.rastro.digitos == {"cpf": ResultadoDigitos.VALIDO}
+
+
+@pytest.mark.anyio
+async def test_dv_invalido_ancorado_vai_para_revisao(settings, gravar) -> None:
+    """O documento traz um CPF com DV falho, lido igual pelo VLM e pelo OCR: dispara a
+    releitura e, persistindo, o campo é INVALIDO. Nunca há correção do dígito."""
+    certo = cpf_sintetico(7)
+    falho = certo[:-1] + str((int(certo[-1]) + 1) % 10)
+    conteudo = imagem_png(105)
+    gravar(conteudo, gravacao_cpf(falho))
+    resultado = await criar_esteira(settings).processar(
+        "id", RequisicaoExtracao(tipo_documento=TipoDocumento.CPF, imagem_base64=b64(conteudo))
+    )
+    assert resultado.resposta is not None
+    assert resultado.resposta.status is StatusDocumento.REVISAO
+    campo = resultado.resposta.campos["cpf"]
+    assert campo.valor == falho and campo.status_validacao is StatusValidacao.INVALIDO
+    assert MotivoCampo.DIGITO_VERIFICADOR_INVALIDO in campo.motivos
+    assert resultado.rastro.digitos == {"cpf": ResultadoDigitos.INVALIDO}
+    assert "cpf" in resultado.rastro.releituras
+
+
+@pytest.mark.anyio
+async def test_nao_ancorado_nunca_aprova(settings, gravar) -> None:
+    conteudo = imagem_png(106)
+    gravar(conteudo, gravacao_cpf_em_revisao(cpf_sintetico(8)))
+    resultado = await criar_esteira(settings).processar(
+        "id", RequisicaoExtracao(tipo_documento=TipoDocumento.CPF, imagem_base64=b64(conteudo))
+    )
+    assert resultado.resposta is not None
+    assert resultado.resposta.status is StatusDocumento.REVISAO
+    assert MotivoCampo.NAO_ANCORADO in resultado.resposta.campos["cpf"].motivos
 
 
 @pytest.mark.anyio
@@ -401,7 +475,7 @@ async def test_sinalizacao_de_captura_por_fonte(settings, gravar, fonte, esperad
     resultado = await criar_esteira(config).processar("id", _req(conteudo))
     assert resultado.resposta is not None
     assert [s.value for s in resultado.resposta.sinalizacoes] == esperado
-    assert resultado.resposta.status is StatusDocumento.REVISAO  # sinalização nunca muda status
+    assert resultado.resposta.status is StatusDocumento.APROVADO  # sinalização nunca muda status
 
 
 @pytest.mark.anyio
@@ -507,6 +581,7 @@ async def test_releitura_ponta_a_ponta_corrige_pelo_ocr(settings, gravar, monkey
     ultimo = str((int(certo[-1]) + 1) % 10)
     errado = certo[:-1] + ultimo
     gravacao = gravacao_cpf(certo)
+    assert gravacao.leitura_visual is not None
     gravacao.leitura_visual.campos["cpf"].texto_literal = errado
     gravacao = gravacao.model_validate(
         {
@@ -543,7 +618,8 @@ async def test_releitura_ponta_a_ponta_corrige_pelo_ocr(settings, gravar, monkey
     assert rel.executada and rel.leituras_concordantes == ("ocr", "releitura")
     assert resultado.resposta is not None
     assert resultado.resposta.campos["cpf"].valor == certo
-    assert resultado.resposta.status is StatusDocumento.REVISAO  # regras ainda stub
+    # OCR e releitura concordam com o valor certo, que passa no DV: aprovado.
+    assert resultado.resposta.status is StatusDocumento.APROVADO
     releitura = next(p for p in pedidos if p.etapa.value == "releitura")
     assert releitura.modelo == "gpt-6.1-sol" and releitura.campo == "cpf"
     assert certo not in releitura.prompt and errado not in releitura.prompt
@@ -556,6 +632,7 @@ async def test_releitura_ponta_a_ponta_corrige_pelo_ocr(settings, gravar, monkey
 async def test_documento_girado_relido_pelo_ocr_de_pe(settings, gravar) -> None:
     conteudo = imagem_png(150)
     gravacao = gravacao_cpf(cpf_sintetico(4))
+    assert gravacao.leitura_visual is not None
     gravacao.leitura_visual.rotacao = Rotacao.GRAUS_90
     gravar(conteudo, gravacao)
     resultado = await criar_esteira(settings).processar(
