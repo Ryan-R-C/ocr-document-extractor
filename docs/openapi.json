@@ -62,6 +62,7 @@
       "CodigoErro": {
         "enum": [
           "REQUISICAO_INVALIDA",
+          "NAO_ENCONTRADO",
           "ARQUIVO_GRANDE_DEMAIS",
           "DOCUMENTO_NAO_PROCESSAVEL",
           "PROVIDER_INDISPONIVEL",
@@ -125,6 +126,8 @@
           "TIPO_DESCONHECIDO",
           "FORMATO_NAO_SUPORTADO",
           "REQUISICAO_MALFORMADA",
+          "EXTRACAO_NAO_ENCONTRADA",
+          "MODO_SINCRONO_DESLIGADO",
           "ARQUIVO_GRANDE_DEMAIS",
           "NENHUM_DOCUMENTO",
           "TIPO_DIVERGENTE",
@@ -212,6 +215,57 @@
           "imagem_base64"
         ],
         "title": "RequisicaoExtracao",
+        "type": "object"
+      },
+      "RespostaAceita": {
+        "description": "202 do modo assíncrono: no POST e na consulta enquanto não conclui.",
+        "examples": [
+          {
+            "id_processamento": "9b1c...",
+            "posicao_fila": 3,
+            "recebido_em": "2026-11-12T10:00:00Z",
+            "situacao": "PENDENTE",
+            "url_consulta": "/v1/extracoes/9b1c..."
+          }
+        ],
+        "properties": {
+          "id_processamento": {
+            "title": "Id Processamento",
+            "type": "string"
+          },
+          "posicao_fila": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Posição entre as pendentes (1 = a próxima); só em PENDENTE.",
+            "title": "Posicao Fila"
+          },
+          "recebido_em": {
+            "format": "date-time",
+            "title": "Recebido Em",
+            "type": "string"
+          },
+          "situacao": {
+            "$ref": "#/components/schemas/SituacaoExtracao"
+          },
+          "url_consulta": {
+            "description": "GET aqui devolve o resultado quando concluir.",
+            "title": "Url Consulta",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id_processamento",
+          "situacao",
+          "url_consulta",
+          "recebido_em"
+        ],
+        "title": "RespostaAceita",
         "type": "object"
       },
       "RespostaErro": {
@@ -374,6 +428,16 @@
         "title": "Sinalizacao",
         "type": "string"
       },
+      "SituacaoExtracao": {
+        "description": "Modo assíncrono: onde a extração está. Concluída, a consulta devolve o resultado.",
+        "enum": [
+          "PENDENTE",
+          "PROCESSANDO",
+          "CONCLUIDA"
+        ],
+        "title": "SituacaoExtracao",
+        "type": "string"
+      },
       "StatusDocumento": {
         "enum": [
           "APROVADO",
@@ -501,6 +565,7 @@
     },
     "/v1/extracoes": {
       "post": {
+        "description": "Desligado por padrão em produção: use `POST /v1/extracoes/assincronas`.",
         "operationId": "extrair_v1_extracoes_post",
         "requestBody": {
           "content": {
@@ -532,6 +597,16 @@
               }
             },
             "description": "Requisição malformada"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RespostaErro"
+                }
+              }
+            },
+            "description": "Modo síncrono desligado (EXTRACAO_SINCRONA=false)"
           },
           "413": {
             "content": {
@@ -584,7 +659,156 @@
             "description": "Provider estourou o tempo após nova tentativa e fallback"
           }
         },
-        "summary": "Extrai e valida os campos de uma imagem de documento"
+        "summary": "Extrai e valida os campos de uma imagem de documento (síncrono)"
+      }
+    },
+    "/v1/extracoes/assincronas": {
+      "post": {
+        "description": "Erros de requisição (400, 413) voltam na hora. O resultado sai em `GET /v1/extracoes/{id_processamento}` (header `Location`).",
+        "operationId": "extrair_assincrono_v1_extracoes_assincronas_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RequisicaoExtracao"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RespostaAceita"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RespostaErro"
+                }
+              }
+            },
+            "description": "Requisição malformada"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RespostaErro"
+                }
+              }
+            },
+            "description": "Arquivo acima do limite"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RespostaErro"
+                }
+              }
+            },
+            "description": "Erro interno"
+          }
+        },
+        "summary": "Põe a extração na fila e responde 202 na hora"
+      }
+    },
+    "/v1/extracoes/{id_processamento}": {
+      "get": {
+        "description": "Concluída, devolve o mesmo corpo e o mesmo código HTTP do modo síncrono.",
+        "operationId": "consultar_v1_extracoes__id_processamento__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id_processamento",
+            "required": true,
+            "schema": {
+              "title": "Id Processamento",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RespostaExtracao"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RespostaAceita"
+                }
+              }
+            },
+            "description": "Ainda na fila ou em processamento"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RespostaErro"
+                }
+              }
+            },
+            "description": "Id desconhecido ou resultado expirado (TTL)"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RespostaErro"
+                }
+              }
+            },
+            "description": "Imagem válida, sem como extrair os campos críticos (código configurável em HTTP_STATUS_FALHA_EXTRACAO)"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RespostaErro"
+                }
+              }
+            },
+            "description": "Erro interno"
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RespostaErro"
+                }
+              }
+            },
+            "description": "Provider indisponível após nova tentativa e fallback"
+          },
+          "504": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RespostaErro"
+                }
+              }
+            },
+            "description": "Provider estourou o tempo após nova tentativa e fallback"
+          }
+        },
+        "summary": "Consulta uma extração assíncrona"
       }
     }
   }

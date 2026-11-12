@@ -30,6 +30,7 @@ comparar = "avaliacao.cli:main_comparar"
 limpeza = "app.armazenamento.limpeza:main"
 medir-ocr = "avaliacao.medir_ocr:main"
 revisao = "avaliacao.revisao:main"
+trabalhador = "app.trabalhador:main"
 
 [project.optional-dependencies]
 ocr = [

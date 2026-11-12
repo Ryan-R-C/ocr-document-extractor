@@ -111,6 +111,7 @@ def settings(dir_gravacoes: Path) -> Settings:
         casos_revisao_ttl="30d",
         provider_timeout_s=2.0,
         log_json=True,
+        extracao_sincrona=True,
     )
 
 

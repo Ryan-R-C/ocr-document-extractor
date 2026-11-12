@@ -1,4 +1,4 @@
-# Ambiente local: API + PostgreSQL + S3 (RustFS) + job de limpeza.
+# Ambiente local: API + trabalhador (modo assíncrono) + PostgreSQL + S3 (RustFS) + limpeza.
 # Uso: make up (sobe, aplica migrações e prepara o bucket) · make down
 
 x-app: &app
@@ -60,6 +60,18 @@ services:
   api:
     <<: *app
     ports: ["8000:8000"]
+    depends_on:
+      preparar:
+        condition: service_completed_successfully
+
+  # Modo assíncrono: reserva tarefas da fila (Postgres) e roda a esteira, com o OCR
+  # carregado e aquecido. Escala com `docker compose up --scale trabalhador=N`.
+  trabalhador:
+    <<: *app
+    command: ["python", "-m", "app.trabalhador"]
+    healthcheck:
+      disable: true
+    stop_grace_period: 60s
     depends_on:
       preparar:
         condition: service_completed_successfully

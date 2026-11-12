@@ -8,6 +8,7 @@ Este módulo não importa FastAPI: o núcleo (`app/core`) e o avaliador usam os 
 
 from __future__ import annotations
 
+from datetime import datetime
 from enum import StrEnum
 from typing import Any
 
@@ -121,6 +122,7 @@ class Sinalizacao(StrEnum):
 
 class CodigoErro(StrEnum):
     REQUISICAO_INVALIDA = "REQUISICAO_INVALIDA"
+    NAO_ENCONTRADO = "NAO_ENCONTRADO"
     ARQUIVO_GRANDE_DEMAIS = "ARQUIVO_GRANDE_DEMAIS"
     DOCUMENTO_NAO_PROCESSAVEL = "DOCUMENTO_NAO_PROCESSAVEL"
     PROVIDER_INDISPONIVEL = "PROVIDER_INDISPONIVEL"
@@ -134,6 +136,9 @@ class MotivoErro(StrEnum):
     TIPO_DESCONHECIDO = "TIPO_DESCONHECIDO"
     FORMATO_NAO_SUPORTADO = "FORMATO_NAO_SUPORTADO"
     REQUISICAO_MALFORMADA = "REQUISICAO_MALFORMADA"
+    # 404 (modo assíncrono; ver docs/decisoes.md)
+    EXTRACAO_NAO_ENCONTRADA = "EXTRACAO_NAO_ENCONTRADA"
+    MODO_SINCRONO_DESLIGADO = "MODO_SINCRONO_DESLIGADO"
     # 413
     ARQUIVO_GRANDE_DEMAIS = "ARQUIVO_GRANDE_DEMAIS"
     # 422 (configurável)
@@ -199,8 +204,17 @@ _EXEMPLO_ERRO: dict[str, Any] = {
     "acao_sugerida": "REENVIAR_IMAGEM",
 }
 
+_EXEMPLO_ACEITA: dict[str, Any] = {
+    "id_processamento": "9b1c...",
+    "situacao": "PENDENTE",
+    "url_consulta": "/v1/extracoes/9b1c...",
+    "posicao_fila": 3,
+    "recebido_em": "2026-11-12T10:00:00Z",
+}
+
 EXEMPLOS = {
     "RequisicaoExtracao": _EXEMPLO_REQUISICAO,
+    "RespostaAceita": _EXEMPLO_ACEITA,
     "RespostaExtracao": _EXEMPLO_RESPOSTA,
     "RespostaErro": _EXEMPLO_ERRO,
 }
@@ -258,6 +272,28 @@ class RespostaErro(BaseModel):
     erro: CodigoErro
     motivos: list[MotivoErroDetalhado]
     acao_sugerida: AcaoSugerida
+
+
+class SituacaoExtracao(StrEnum):
+    """Modo assíncrono: onde a extração está. Concluída, a consulta devolve o resultado."""
+
+    PENDENTE = "PENDENTE"
+    PROCESSANDO = "PROCESSANDO"
+    CONCLUIDA = "CONCLUIDA"
+
+
+class RespostaAceita(BaseModel):
+    """202 do modo assíncrono: no POST e na consulta enquanto não conclui."""
+
+    model_config = ConfigDict(json_schema_extra={"examples": [_EXEMPLO_ACEITA]})
+
+    id_processamento: str
+    situacao: SituacaoExtracao
+    url_consulta: str = Field(description="GET aqui devolve o resultado quando concluir.")
+    posicao_fila: int | None = Field(
+        default=None, description="Posição entre as pendentes (1 = a próxima); só em PENDENTE."
+    )
+    recebido_em: datetime
 
 
 class RespostaSaude(BaseModel):

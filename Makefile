@@ -13,13 +13,13 @@ setup:  ## dependências (com o PaddleOCR), .env local e gabarito sintético de 
 	@test -f $(MANIFESTO) || $(MAKE) gabarito-sintetico
 
 up: setup  ## sobe api, postgres, s3 (RustFS) e limpeza (migrações e bucket no serviço preparar)
-	docker compose up -d --build --wait api
+	docker compose up -d --build --wait api trabalhador
 
 down:
 	docker compose down
 
 logs:
-	docker compose logs -f api limpeza
+	docker compose logs -f api trabalhador limpeza
 
 test:  ## testes sem dependências externas (fakes, SQLite, S3 simulado)
 	uv run pytest

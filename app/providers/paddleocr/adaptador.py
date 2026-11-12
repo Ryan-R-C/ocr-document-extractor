@@ -55,7 +55,8 @@ def descrever_modelo(settings: Settings) -> str:
     """Identifica o OCR em `versao_pipeline` e nas métricas: versão, idioma e modelos."""
     det = settings.paddleocr_modelo_deteccao or "padrao"
     rec = settings.paddleocr_modelo_reconhecimento or "padrao"
-    return f"paddleocr-{_versao_paddleocr()}:{settings.paddleocr_idioma}:{det}/{rec}"
+    limite = f":det{settings.paddleocr_det_lado_max}" if settings.paddleocr_det_lado_max else ""
+    return f"paddleocr-{_versao_paddleocr()}:{settings.paddleocr_idioma}:{det}/{rec}{limite}"
 
 
 def criar_motor(settings: Settings) -> MotorOCR:
@@ -78,6 +79,9 @@ def criar_motor(settings: Settings) -> MotorOCR:
             opcoes["text_recognition_model_name"] = settings.paddleocr_modelo_reconhecimento
     else:
         opcoes["lang"] = settings.paddleocr_idioma
+    if settings.paddleocr_det_lado_max is not None:
+        opcoes["text_det_limit_type"] = "max"
+        opcoes["text_det_limit_side_len"] = settings.paddleocr_det_lado_max
     if settings.paddleocr_score_min is not None:
         opcoes["text_rec_score_thresh"] = settings.paddleocr_score_min
     motor: MotorOCR = PaddleOCR(**opcoes)

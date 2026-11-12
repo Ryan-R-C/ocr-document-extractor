@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import math
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
@@ -106,7 +107,8 @@ def criar_app(
         esteira = criar_esteira(settings)
         servico = ServicoExtracao(settings, esteira, Repositorio(criar_sessoes(engine)), objetos)
         candidato = getattr(esteira.deps.leitor_texto, "aquecer", None)
-        if settings.leitor_texto_aquecer and callable(candidato):
+        # Só a API síncrona roda a esteira; no assíncrono quem carrega o OCR é o trabalhador.
+        if settings.extracao_sincrona and settings.leitor_texto_aquecer and callable(candidato):
             aquecer = candidato
 
         async def verificar_padrao() -> dict[str, str]:
@@ -150,6 +152,17 @@ def criar_app(
             for nome, exemplo in EXEMPLOS.items():
                 if nome in schemas:
                     schemas[nome]["examples"] = [exemplo]
+            # Erro de validação vira 400 (handler abaixo): o 422 automático do FastAPI
+            # nunca acontece e não entra no contrato.
+            for caminho in documento.get("paths", {}).values():
+                for operacao in caminho.values():
+                    resposta = operacao.get("responses", {}).get("422", {})
+                    esquema = resposta.get("content", {}).get("application/json", {})
+                    if "HTTPValidationError" in str(esquema.get("schema", "")):
+                        del operacao["responses"]["422"]
+            if "HTTPValidationError" not in json.dumps(documento.get("paths", {})):
+                schemas.pop("HTTPValidationError", None)
+                schemas.pop("ValidationError", None)
             app.openapi_schema = documento
         return app.openapi_schema
 

@@ -118,6 +118,9 @@ class Settings(BaseSettings):
     # oneDNN falha no Paddle 3.3.1 em CPU; ver docs/decisoes.md.
     paddleocr_mkldnn: bool = False
     paddleocr_score_min: Annotated[float, Field(ge=0, le=1)] | None = None
+    # Limite do lado maior da imagem na detecção (reduz antes de detectar; o reconhecimento
+    # continua nos recortes em resolução original). Vazio = padrão do PaddleOCR (sem limite).
+    paddleocr_det_lado_max: PositiveInt | None = None
     # Aquecimento no startup da API (carrega os pesos e roda uma inferência).
     leitor_texto_aquecer: bool = True
 
@@ -158,6 +161,22 @@ class Settings(BaseSettings):
     artefatos_ttl: Literal["8h", "16h"] | None = "8h"
     casos_revisao_ttl: str | None = None
     limpeza_intervalo_s: PositiveInt = 300
+
+    # --- Modo assíncrono (fila no Postgres + trabalhador) ------------------------------------
+    # POST /v1/extracoes síncrono: desligado por padrão (produção usa o assíncrono).
+    extracao_sincrona: bool = False
+    # Tarefas processadas ao mesmo tempo por trabalhador; vazio = PADDLEOCR_INSTANCIAS.
+    trabalhador_concorrencia: PositiveInt | None = None
+    # Reserva de uma tarefa: se o trabalhador cair, ela volta para a fila depois disso.
+    fila_reserva_s: PositiveInt = 300
+    # Tentativas por tarefa em erro transitório do provider (502/504), com espera crescente.
+    fila_tentativas_max: PositiveInt = 3
+    fila_espera_inicial_s: Annotated[float, Field(ge=0)] = 5.0
+    fila_espera_max_s: Annotated[float, Field(ge=0)] = 60.0
+    # Intervalo entre consultas à fila quando ela está vazia.
+    fila_intervalo_s: Annotated[float, Field(gt=0)] = 1.0
+    # Sugestão de espera (header Retry-After) na consulta de tarefa ainda não concluída.
+    consulta_retry_after_s: PositiveInt = 2
 
     # --- API -------------------------------------------------------------------------------
     http_status_falha_extracao: Literal[400, 422] = 422
@@ -240,6 +259,8 @@ class Settings(BaseSettings):
         "paddleocr_modelo_deteccao",
         "paddleocr_modelo_reconhecimento",
         "paddleocr_score_min",
+        "paddleocr_det_lado_max",
+        "trabalhador_concorrencia",
         mode="before",
     )
     @classmethod
@@ -255,6 +276,10 @@ class Settings(BaseSettings):
     @property
     def ttl_casos_revisao(self) -> timedelta | None:
         return interpretar_duracao(self.casos_revisao_ttl)
+
+    @property
+    def concorrencia_trabalhador(self) -> int:
+        return self.trabalhador_concorrencia or self.paddleocr_instancias
 
     def limite_provider(self, provider: str) -> LimiteProvider:
         return self.provider_limites.get(provider, LimiteProvider())

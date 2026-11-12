@@ -1,6 +1,7 @@
 """Job de limpeza: garante o TTL de 8 h / 16 h conferindo `expira_em` no banco.
 
-Para cada registro vencido, apaga primeiro os objetos e depois o metadado. Se apagar os
+Para cada registro vencido (processamento, caso em revisão ou tarefa da fila do modo
+assíncrono), apaga primeiro os objetos e depois o metadado. Se apagar os
 objetos falhar, o registro fica para a próxima rodada (idempotente).
 
 Uso: `limpeza` (uma rodada) ou `limpeza --loop` (a cada LIMPEZA_INTERVALO_S).
@@ -14,8 +15,10 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from app.armazenamento.db import criar_engine, criar_sessoes
+from app.armazenamento.fila import Fila
 from app.armazenamento.objetos import Objetos
 from app.armazenamento.repositorio import Repositorio
+from app.armazenamento.retencao import PREFIXO_FILA
 from app.config import obter_settings
 from app.logs import configurar_logs, obter_logger
 
@@ -26,6 +29,7 @@ log = obter_logger(__name__)
 class RelatorioLimpeza:
     processamentos: int = 0
     casos: int = 0
+    tarefas: int = 0
     objetos: int = 0
     falhas: int = 0
 
@@ -56,6 +60,16 @@ def executar_limpeza(
         except Exception as erro:
             relatorio.falhas += 1
             log.error("limpeza_falhou", id_caso=caso.id, erro=type(erro).__name__)
+
+    fila = Fila(repositorio.sessoes)
+    for tarefa in fila.expiradas(agora):
+        try:
+            relatorio.objetos += objetos.apagar_prefixo(f"{PREFIXO_FILA}/{tarefa.id}")
+            fila.apagar(tarefa.id)
+            relatorio.tarefas += 1
+        except Exception as erro:
+            relatorio.falhas += 1
+            log.error("limpeza_falhou", id_processamento=tarefa.id, erro=type(erro).__name__)
 
     log.info("limpeza_concluida", **relatorio.__dict__)
     return relatorio

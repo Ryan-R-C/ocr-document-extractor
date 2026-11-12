@@ -8,7 +8,16 @@ from typing import Any
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
-from app.api.contrato import RequisicaoExtracao, RespostaErro, RespostaExtracao, RespostaSaude
+from app.api.contrato import (
+    AcaoSugerida,
+    CodigoErro,
+    MotivoErro,
+    RequisicaoExtracao,
+    RespostaAceita,
+    RespostaErro,
+    RespostaExtracao,
+    RespostaSaude,
+)
 
 router = APIRouter()
 
@@ -39,13 +48,68 @@ def id_da_requisicao(request: Request) -> str:
 @router.post(
     "/v1/extracoes",
     response_model=RespostaExtracao,
-    responses=RESPOSTAS_EXTRACAO,
-    summary="Extrai e valida os campos de uma imagem de documento",
+    responses={
+        **RESPOSTAS_EXTRACAO,
+        404: {**_ERRO, "description": "Modo síncrono desligado (EXTRACAO_SINCRONA=false)"},
+    },
+    summary="Extrai e valida os campos de uma imagem de documento (síncrono)",
+    description="Desligado por padrão em produção: use `POST /v1/extracoes/assincronas`.",
 )
 async def extrair(requisicao: RequisicaoExtracao, request: Request) -> JSONResponse:
+    if not request.app.state.settings.extracao_sincrona:
+        from app.servico import erro_simples
+
+        corpo = erro_simples(
+            id_da_requisicao(request),
+            CodigoErro.NAO_ENCONTRADO,
+            MotivoErro.MODO_SINCRONO_DESLIGADO,
+            AcaoSugerida.CORRIGIR_REQUISICAO,
+        )
+        return JSONResponse(status_code=404, content=corpo)
     servico = request.app.state.servico
     resultado = await servico.processar(requisicao, id_da_requisicao(request))
     return JSONResponse(status_code=resultado.http_status, content=resultado.corpo)
+
+
+@router.post(
+    "/v1/extracoes/assincronas",
+    status_code=202,
+    response_model=RespostaAceita,
+    responses={
+        400: RESPOSTAS_EXTRACAO[400],
+        413: RESPOSTAS_EXTRACAO[413],
+        500: RESPOSTAS_EXTRACAO[500],
+    },
+    summary="Põe a extração na fila e responde 202 na hora",
+    description="Erros de requisição (400, 413) voltam na hora. O resultado sai em "
+    "`GET /v1/extracoes/{id_processamento}` (header `Location`).",
+)
+async def extrair_assincrono(requisicao: RequisicaoExtracao, request: Request) -> JSONResponse:
+    servico = request.app.state.servico
+    resultado = await servico.enfileirar(requisicao, id_da_requisicao(request))
+    return JSONResponse(
+        status_code=resultado.http_status, content=resultado.corpo, headers=resultado.headers
+    )
+
+
+@router.get(
+    "/v1/extracoes/{id_processamento}",
+    response_model=RespostaExtracao,
+    responses={
+        202: {"model": RespostaAceita, "description": "Ainda na fila ou em processamento"},
+        404: {**_ERRO, "description": "Id desconhecido ou resultado expirado (TTL)"},
+        **{k: v for k, v in RESPOSTAS_EXTRACAO.items() if k not in (400, 413)},
+    },
+    summary="Consulta uma extração assíncrona",
+    description="Concluída, devolve o mesmo corpo e o mesmo código HTTP do modo síncrono.",
+)
+async def consultar(id_processamento: str, request: Request) -> JSONResponse:
+    request.state.id_processamento = id_processamento[:36]
+    servico = request.app.state.servico
+    resultado = await servico.consultar(id_processamento[:36])
+    return JSONResponse(
+        status_code=resultado.http_status, content=resultado.corpo, headers=resultado.headers
+    )
 
 
 @router.get("/health", response_model=RespostaSaude, responses={503: {"model": RespostaSaude}})
