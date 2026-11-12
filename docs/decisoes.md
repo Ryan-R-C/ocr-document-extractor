@@ -382,3 +382,56 @@ resposta a elas; as quatro foram decididas pela proposta do plano e estão marca
 87. **Fila do OCR conta para o tempo limite:** com uma instância por processo, requisições
     simultâneas esperam o modelo, e a espera entra no `PROVIDER_TIMEOUT_S`. Em produção,
     concorrência por container ≈ `PADDLEOCR_INSTANCIAS`, ou o modo assíncrono.
+
+## 2026-11-12 · Modo assíncrono (fora da sequência de fases, na mesma branch)
+
+Pedido para diminuir a latência percebida e controlar a concorrência no OCR. Plano
+aprovado com as sugestões para as cinco dúvidas.
+
+88. **Modo assíncrono entra já** (resolve a decisão em aberto sobre o tempo de resposta do
+    chamador):
+    - `POST /v1/extracoes/assincronas` responde 202 com `id_processamento`, `situacao`,
+      `url_consulta` (também no header `Location`), `posicao_fila` e `Retry-After`;
+    - `GET /v1/extracoes/{id}` responde 202 enquanto não conclui; concluída, devolve o
+      mesmo corpo e o mesmo código HTTP do síncrono; id desconhecido ou expirado dá 404
+      `NAO_ENCONTRADO`/`EXTRACAO_NAO_ENCONTRADA`.
+
+    *Descartado:* `Prefer: respond-async` no mesmo endpoint (contrato menos explícito).
+89. **O síncrono fica, desligado por padrão** (`EXTRACAO_SINCRONA=false`; 404
+    `MODO_SINCRONO_DESLIGADO`). O `.env.example` liga para uso local. Com ele desligado, a
+    API não carrega o OCR: sobe em segundos e usa ~110 MB.
+90. **Só consulta (polling), sem webhook** por enquanto.
+91. **Fila no próprio Postgres** (`tarefas_extracao`, `SELECT … FOR UPDATE SKIP LOCKED`).
+    A imagem fica no S3 em `fila/<id>/`, criptografada, e é apagada ao concluir; o
+    resultado fica no pacote de auditoria, como no síncrono. Nenhuma coluna guarda valor de
+    campo; o corpo de erro gerado pela própria fila não tem dado pessoal. *Descartado:*
+    Redis/SQS (infraestrutura nova).
+92. **Erros de requisição continuam síncronos** (400/413 no POST). O cache vale nos dois
+    modos: documento já processado responde 202 `CONCLUIDA` e a consulta devolve o
+    resultado na hora.
+93. **Trabalhador** (`uv run trabalhador`, serviço no compose):
+    - concorrência = `TRABALHADOR_CONCORRENCIA` (padrão: `PADDLEOCR_INSTANCIAS`), para a
+      fila do OCR nunca estourar o tempo limite (decisão 87);
+    - escala horizontal com mais containers;
+    - aquece o OCR antes da primeira tarefa e para de forma limpa em SIGTERM.
+94. **Falhas na fila:**
+    - erro transitório (502/504) volta para a fila com espera crescente
+      (`FILA_ESPERA_INICIAL_S` × 2ⁿ, até `FILA_ESPERA_MAX_S`) até `FILA_TENTATIVAS_MAX`;
+      depois disso, o 502/504 é o resultado;
+    - trabalhador que morre: a reserva (`FILA_RESERVA_S`) vence e outro retoma; reservada
+      mais vezes que o limite, a tarefa termina com 500 `ERRO_INTERNO` (protege contra uma
+      imagem que derruba o processo);
+    - falha ao gravar o pacote de auditoria também dá 500 na consulta (não há resultado
+      gravado para devolver);
+    - o custo das tentativas devolvidas vai só para o log (`tarefa_devolvida`).
+95. **TTL:** a tarefa expira com o TTL dos artefatos contado da chegada; o processamento
+    também conta da chegada, não do início no trabalhador. A limpeza apaga tarefas vencidas
+    e a imagem da fila; o lifecycle de 2 dias em `fila/` é só rede de segurança.
+96. **O 422 automático do FastAPI sai do OpenAPI:** a validação vira 400 pelo handler, e
+    aquele 422 nunca acontece.
+97. **OCR: medium continua o padrão.** O mobile perde de 3 a 5 pontos de ancoragem no
+    sintético em todas as variações (condição combinada: só trocar sem perda). O limite da
+    detecção (`PADDLEOCR_DET_LADO_MAX`) existe e fica desligado. Medido isolado no container,
+    com cartões de 1100 px: em 960 px o p50 cai de 10,2 para 9,2 s e o pico de memória de
+    1,46 para 1,24 GB, sem perda de ancoragem; em 640 px a ancoragem cai 1 ponto. Em foto
+    real (~1600 px após o recorte) o ganho tende a ser maior; decide-se no gabarito real.

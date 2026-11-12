@@ -148,3 +148,31 @@ A imagem Docker passou de 438 MB para 2,73 GB (PaddlePaddle e pesos).
    ```bash
    uv run revisao exportar --destino saidas/revisao
    ```
+
+## Adendo · 2026-11-12 · modo assíncrono
+
+Entregue a pedido, fora da sequência de fases, para diminuir a latência percebida e
+controlar a concorrência (decisões 88 a 97).
+
+- **Contrato:**
+  - `POST /v1/extracoes/assincronas` responde 202 na hora;
+  - `GET /v1/extracoes/{id}` responde 202 até concluir e depois devolve o mesmo corpo e
+    código HTTP do síncrono;
+  - o síncrono fica desligado por padrão.
+- **Fila no Postgres** com `SKIP LOCKED`, imagem no S3 até concluir, reserva com prazo e
+  novas tentativas com espera crescente.
+- **Trabalhador:** um por container, com concorrência igual às instâncias do OCR. Resolve o
+  risco 2 deste relatório (fila do OCR estourando o tempo limite).
+- **Validado no Docker Compose com Postgres real e PaddleOCR:**
+  - POST em 31 a 99 ms;
+  - três documentos concluídos na ordem da fila, cada um em 11 a 16 s de processamento;
+  - API com ~110 MB (não carrega o OCR) e trabalhador com o OCR aquecido.
+- **Latência do processamento:**
+  - o mobile foi descartado como padrão, porque perde ancoragem;
+  - o limite da detecção ficou disponível e desligado;
+  - o tempo por documento continua sendo o do OCR em CPU. As próximas alavancas são o
+    limite da detecção medido em foto real, o MKLDNN em versões novas do Paddle e mais
+    trabalhadores.
+- **Testes:** 320 passando, 15 deles do modo assíncrono. Cobrem o fluxo completo igual ao
+  síncrono, cache, 400 na hora, 404, 422 na consulta, erro transitório até esgotar, reserva
+  vencida, concorrência limitada e limpeza.

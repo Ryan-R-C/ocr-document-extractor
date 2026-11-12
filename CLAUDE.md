@@ -38,7 +38,7 @@ POST /v1/extracoes
   → resposta 200 + pacote de auditoria (com TTL) + caso em revisão (quando houver)
 ```
 
-O mesmo fluxo roda em produção e no avaliador sobre o gabarito. A esteira é uma função independente do FastAPI, para que um modo assíncrono (202 + consulta por id) possa entrar depois sem mexer no núcleo.
+O mesmo fluxo roda em produção e no avaliador sobre o gabarito. A esteira é uma função independente do FastAPI. Em produção ela roda no modo assíncrono: `POST /v1/extracoes/assincronas` responde 202 e enfileira (Postgres), o `trabalhador` processa com concorrência igual às instâncias do OCR, e `GET /v1/extracoes/{id}` devolve o resultado. O `POST /v1/extracoes` síncrono existe para uso local e fica desligado por padrão (`EXTRACAO_SINCRONA`).
 
 Cada provider é um adaptador trocado por configuração, atrás de três interfaces (`Protocol`) em `app/providers/interfaces.py`:
 
@@ -97,7 +97,8 @@ Adotado (ver `docs/decisoes.md`): Python 3.12, uv, pydantic-settings, SQLAlchemy
 Atualize esta seção à medida que os comandos existirem.
 
 - `make setup`: dependências, `.env` a partir do `.env.example` e gabarito sintético de demonstração
-- `make up` / `make down`: api, postgres, s3 (RustFS) e o job de limpeza via Docker Compose; o serviço `preparar` aplica as migrações e configura o bucket
+- `make up` / `make down`: api, trabalhador, postgres, s3 (RustFS) e o job de limpeza via Docker Compose; o serviço `preparar` aplica as migrações e configura o bucket
+- `uv run trabalhador`: processa a fila do modo assíncrono (escala com mais containers)
 - `make setup` instala o extra `ocr` (PaddleOCR); os pesos vêm do Hugging Face no primeiro uso, ou já estão na imagem Docker
 - `make test`: testes sem dependências externas (fakes, SQLite, S3 simulado com moto)
 - `make test-ocr`: o teste que roda o PaddleOCR de verdade (marcador `ocr_real`)
@@ -116,7 +117,7 @@ Atualize esta seção à medida que os comandos existirem.
 Do plano:
 - Nomes exatos do enum `tipo_documento` e dos campos que o sistema de destino usa: [A PREENCHER]
 - Código HTTP para falha de extração: 422 (sugerido) ou 400; fica configurável em `HTTP_STATUS_FALHA_EXTRACAO`.
-- Tempo máximo de resposta aceito pelo chamador, que define se o modo assíncrono entra já: [A PREENCHER]
+- ~~Tempo máximo de resposta aceito pelo chamador, que define se o modo assíncrono entra já~~: resolvido em 2026-11-12, o modo assíncrono entra já (decisão 88).
 - Modelo inicial: gpt-6.1-terra, a confirmar pelo baseline.
 - Leitor de texto: PaddleOCR em CPU ou serviço em nuvem, decidido pela taxa de ancoragem no gabarito.
 - TTL padrão dos artefatos e quem acessa os casos em revisão.
