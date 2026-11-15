@@ -1,9 +1,7 @@
-"""Interface com a Fase 3: checagem de dígitos verificadores usada pela releitura.
+"""Interface entre a releitura (Fase 2) e a checagem de dígitos verificadores (Fase 3).
 
-A Fase 3 entrega `app/regras/digitos.py` com uma função neste formato. Ela só diz se o
-dígito verificador confere e nunca corrige o valor (invariante 4). Até a integração no
-portão 2+3, a esteira usa `checar_pendente`, que não decide nada (NAO_APLICAVEL): a
-releitura dispara só por ancoragem.
+A implementação está em `app/regras/digitos.py`. A checagem só diz se o dígito
+verificador confere e nunca corrige o valor (invariante 4).
 """
 
 from __future__ import annotations
@@ -11,20 +9,18 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Protocol
 
-from app.schemas.normalizacao import TipoValor
-
-IMPLEMENTADO = False
+from app.api.contrato import UF
+from app.schemas.campos import DefinicaoCampo
 
 
 class ResultadoDigitos(StrEnum):
     VALIDO = "VALIDO"
     INVALIDO = "INVALIDO"
-    NAO_APLICAVEL = "NAO_APLICAVEL"  # tipo sem dígito verificador, ou checagem pendente
+    # Campo sem dígito verificador, ou que não dá para checar (RG fora de SP).
+    NAO_APLICAVEL = "NAO_APLICAVEL"
 
 
 class ChecadorDigitos(Protocol):
-    def __call__(self, tipo_valor: TipoValor, valor_normalizado: str) -> ResultadoDigitos: ...
-
-
-def checar_pendente(tipo_valor: TipoValor, valor_normalizado: str) -> ResultadoDigitos:
-    return ResultadoDigitos.NAO_APLICAVEL
+    def __call__(
+        self, definicao: DefinicaoCampo, valor_normalizado: str, uf: UF | None
+    ) -> ResultadoDigitos: ...

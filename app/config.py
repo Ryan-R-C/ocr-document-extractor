@@ -7,9 +7,10 @@ nunca como constantes espalhadas pelo código.
 from __future__ import annotations
 
 import re
-from datetime import timedelta
+from datetime import date, datetime, timedelta
 from functools import lru_cache
 from typing import Annotated, Literal
+from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, Field, NonNegativeFloat, PositiveInt, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -203,6 +204,21 @@ class Settings(BaseSettings):
     sinalizacao_captura_fonte: Literal["vlm", "heuristica", "qualquer", "ambas"] = "qualquer"
     # Ver docs/decisoes.md: por padrão, NAO_VERIFICAVEL em campo crítico impede APROVADO.
     aprovar_critico_nao_verificavel: bool = False
+    # Campo crítico AUSENTE (com algum outro crítico lido): REVISAO (padrão) ou 422.
+    # Todos os críticos AUSENTE continuam dando 422 LADO_SEM_DADOS.
+    critico_ausente: Literal["REVISAO", "422"] = "REVISAO"
+
+    # --- Motor de regras (Fase 3) -------------------------------------------------------
+    # Data do processamento no fuso do negócio; fixá-la torna a avaliação reproduzível.
+    regras_fuso: str = "America/Sao_Paulo"
+    regras_data_processamento: date | None = None
+    regras_ano_minimo: Annotated[int, Field(ge=1800)] = 1900
+    regras_idade_min: Annotated[int, Field(ge=0)] = 14
+    regras_idade_max: Annotated[int, Field(ge=1)] = 120
+    regras_idade_min_admissao: Annotated[int, Field(ge=0)] = 14
+    regras_cin_validade_tolerancia_dias: Annotated[int, Field(ge=0)] = 31
+    regras_cnh_validade_tolerancia_dias: Annotated[int, Field(ge=0)] = 31
+    regras_moeda_transicao_dias: Annotated[int, Field(ge=0)] = 180
 
     # --- Banco e objetos -------------------------------------------------------------------
     database_url: str = "postgresql+psycopg://extracao:extracao@localhost:5432/extracao"
@@ -261,6 +277,7 @@ class Settings(BaseSettings):
         "paddleocr_score_min",
         "paddleocr_det_lado_max",
         "trabalhador_concorrencia",
+        "regras_data_processamento",
         mode="before",
     )
     @classmethod
@@ -280,6 +297,11 @@ class Settings(BaseSettings):
     @property
     def concorrencia_trabalhador(self) -> int:
         return self.trabalhador_concorrencia or self.paddleocr_instancias
+
+    def data_processamento(self) -> date:
+        if self.regras_data_processamento is not None:
+            return self.regras_data_processamento
+        return datetime.now(ZoneInfo(self.regras_fuso)).date()
 
     def limite_provider(self, provider: str) -> LimiteProvider:
         return self.provider_limites.get(provider, LimiteProvider())

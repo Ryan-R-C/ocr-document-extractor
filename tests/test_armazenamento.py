@@ -14,7 +14,14 @@ from app.armazenamento.modelos import CasoRevisao, ChamadaProvider, Processament
 from app.config import Settings
 from app.montagem import criar_esteira
 from app.servico import ServicoExtracao
-from tests.conftest import b64, cpf_sintetico, gravacao_cpf, imagem_png, montar_cliente
+from tests.conftest import (
+    b64,
+    cpf_sintetico,
+    gravacao_cpf,
+    gravacao_cpf_em_revisao,
+    imagem_png,
+    montar_cliente,
+)
 
 
 def _post(cliente, conteudo: bytes, tipo: str = "CPF") -> dict:
@@ -60,15 +67,19 @@ def test_pacote_de_auditoria_completo(cliente, gravar, objetos, repositorio) -> 
     assert manifesto["ancoragens"]["cpf"]["palavras_ids"] == [1]
     assert manifesto["ancoragens"]["cpf"]["rotulo_ids"] == [0]
     assert manifesto["releituras"] == {}
-    assert manifesto["regras"]["aplicadas"][0]["id"] == "stub.nao_implementada"
-    assert manifesto["regras"]["aplicadas"][0]["versao"]
-    assert manifesto["decisao"]["status"] == "REVISAO"
+    aplicadas = {(a["id"], a["campo"]): a for a in manifesto["regras"]["aplicadas"]}
+    assert aplicadas[("digitos.cpf", "cpf")]["resultado"] == "VALIDO"
+    assert aplicadas[("digitos.cpf", "cpf")]["versao"]
+    assert aplicadas[("sem_regra", "nome")]["resultado"] == "VALIDO"
+    assert manifesto["regras"]["versao"] in manifesto["versao_pipeline"]
+    assert manifesto["digitos"] == {"cpf": "VALIDO"}
+    assert manifesto["decisao"]["status"] == "APROVADO"
     assert manifesto["recebido_em"] and manifesto["concluido_em"]
-    assert set(manifesto["stubs_ativos"]) == {"regras", "digitos"}
+    assert manifesto["stubs_ativos"] == []
 
     processamento = repositorio.obter(id_proc)
     assert processamento.sha256_imagem == sha
-    assert processamento.status == "REVISAO"
+    assert processamento.status == "APROVADO"
     assert processamento.prefixo_pacote == prefixo
     chamadas = _todos(repositorio, ChamadaProvider)
     assert {c.etapa for c in chamadas} == {"leitura_visual", "leitura_texto"}
@@ -121,7 +132,7 @@ def test_expira_em_por_ttl(settings, repositorio, objetos, gravar, ttl, prefixo,
 
 def test_caso_em_revisao_tem_registro_e_ttl_proprios(cliente, gravar, repositorio, objetos) -> None:
     conteudo = imagem_png(4)
-    gravar(conteudo, gravacao_cpf(cpf_sintetico()))
+    gravar(conteudo, gravacao_cpf_em_revisao(cpf_sintetico()))
     corpo = _post(cliente, conteudo)
     [caso] = _todos(repositorio, CasoRevisao)
     assert caso.processamento_id == corpo["id_processamento"]
@@ -151,7 +162,7 @@ def test_requisicao_invalida_registra_sem_pacote(cliente, repositorio, objetos) 
 
 def test_limpeza_apaga_so_o_que_venceu(settings, cliente, gravar, repositorio, objetos) -> None:
     conteudo = imagem_png(5)
-    gravar(conteudo, gravacao_cpf(cpf_sintetico()))
+    gravar(conteudo, gravacao_cpf_em_revisao(cpf_sintetico()))
     corpo = _post(cliente, conteudo)
     id_proc = corpo["id_processamento"]
     agora = datetime.now(UTC)

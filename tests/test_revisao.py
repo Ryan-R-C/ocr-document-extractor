@@ -10,13 +10,13 @@ import pytest
 from app.armazenamento.modelos import CasoRevisao
 from avaliacao.gabarito import ler_manifesto
 from avaliacao.revisao import ErroRevisao, exportar, importar
-from tests.conftest import b64, cpf_sintetico, gravacao_cpf, imagem_png
+from tests.conftest import b64, cpf_sintetico, gravacao_cpf_em_revisao, imagem_png
 
 
 def _caso_em_revisao(cliente, gravar, semente: int = 1) -> tuple[str, bytes]:
     conteudo = imagem_png(300 + semente)
     cpf = cpf_sintetico(semente)
-    gravar(conteudo, gravacao_cpf(cpf))
+    gravar(conteudo, gravacao_cpf_em_revisao(cpf))
     corpo = cliente.post(
         "/v1/extracoes", json={"tipo_documento": "CPF", "imagem_base64": b64(conteudo)}
     ).json()
@@ -42,7 +42,7 @@ def test_exportar_e_importar(cliente, gravar, repositorio, objetos, tmp_path) ->
     assert (pasta / "imagem_recebida.png").read_bytes() == conteudo
     assert (pasta / "recortes" / "cpf.png").exists()
     leituras = json.loads((pasta / "leituras.json").read_text())
-    assert leituras["ancoragens"]["cpf"]["status"] == "ANCORADO"
+    assert leituras["ancoragens"]["cpf"]["status"] == "NAO_ANCORADO"
     modelo = json.loads((pasta / "correcao.json").read_text())
     assert modelo["subtipo"] == "CPF_CARTAO"
     # O modelo vem em branco: a conferência não é induzida pelo valor lido.

@@ -3,8 +3,11 @@
 Invariante 1 do CLAUDE.md: nenhum campo crítico é aprovado sem leitura LEGIVEL do VLM,
 ancoragem no OCR e validação sem falha. Campo manuscrito crítico exige duas leituras de
 modelos diferentes concordando (no lugar da ancoragem, que o OCR não faz em manuscrito).
-Este módulo é código real desde a Fase 0. O motor de regras ainda é stub (Fase 3) e chega
-aqui como "não verificável": sem ele, nada resulta em APROVADO.
+Falhas por campo crítico (Fase 3):
+- todos os críticos AUSENTE → 422 LADO_SEM_DADOS;
+- algum crítico ILEGIVEL → 422 CAMPO_CRITICO_ILEGIVEL (um motivo por campo);
+- crítico AUSENTE com outro lido → REVISAO, ou 422 CAMPO_CRITICO_AUSENTE com
+  CRITICO_AUSENTE=422.
 """
 
 from __future__ import annotations
@@ -27,8 +30,15 @@ from app.core.ancoragem import ResultadoAncoragem, StatusAncoragem
 from app.core.erros import FalhaExtracao
 from app.core.releitura import ResultadoReleitura
 from app.providers.interfaces import CampoLido, LeituraVisual, QualidadeCaptura
-from app.regras.motor import EntradaRegra, ResultadoValidacao
-from app.schemas.campos import SUBTIPOS_POR_TIPO, DefinicaoCampo, Escrita, campos_do_subtipo
+from app.regras.base import EntradaRegra
+from app.regras.motor import ResultadoValidacao
+from app.schemas.campos import (
+    CAMPOS_DERIVADOS,
+    SUBTIPOS_POR_TIPO,
+    DefinicaoCampo,
+    Escrita,
+    campos_do_subtipo,
+)
 
 _LIDOS = (StatusLeitura.LEGIVEL, StatusLeitura.PARCIAL)
 
@@ -120,19 +130,59 @@ def aplicar_releituras(
     return finais
 
 
-def _falha_sem_criticos(preparados: dict[str, CampoPreparado]) -> FalhaExtracao | None:
+def _falha_criticos(
+    preparados: dict[str, CampoPreparado], ausente_422: bool
+) -> FalhaExtracao | None:
     criticos = [p for p in preparados.values() if p.definicao.critico]
-    if not criticos or any(p.status_leitura in _LIDOS for p in criticos):
+    if not criticos:
         return None
     if all(p.status_leitura is StatusLeitura.AUSENTE for p in criticos):
         return FalhaExtracao.de(MotivoErro.LADO_SEM_DADOS)
-    return FalhaExtracao(
-        [
-            MotivoErroDetalhado(codigo=MotivoErro.CAMPO_CRITICO_ILEGIVEL, campo=p.definicao.nome)
+    falhas = [
+        MotivoErroDetalhado(codigo=MotivoErro.CAMPO_CRITICO_ILEGIVEL, campo=p.definicao.nome)
+        for p in criticos
+        if p.status_leitura is StatusLeitura.ILEGIVEL
+    ]
+    if ausente_422:
+        falhas += [
+            MotivoErroDetalhado(codigo=MotivoErro.CAMPO_CRITICO_AUSENTE, campo=p.definicao.nome)
             for p in criticos
-            if p.status_leitura is StatusLeitura.ILEGIVEL
+            if p.status_leitura is StatusLeitura.AUSENTE
         ]
-    )
+    return FalhaExtracao(falhas) if falhas else None
+
+
+def campos_derivados(subtipo: Subtipo, campos: dict[str, Campo]) -> dict[str, Campo]:
+    """Campos montados pelo código a partir de outro (CTPS digital: número e série do
+    CPF). Herdam leitura e validação da origem; sem valor normalizado, saem sem valor."""
+    derivados: dict[str, Campo] = {}
+    for d in CAMPOS_DERIVADOS.get(subtipo, ()):
+        origem = campos.get(d.origem)
+        if origem is None:
+            continue
+        if origem.valor_normalizado is None:
+            status = (
+                origem.status_leitura
+                if origem.status_leitura in (StatusLeitura.AUSENTE, StatusLeitura.ILEGIVEL)
+                else StatusLeitura.ILEGIVEL
+            )
+            derivados[d.nome] = Campo(
+                valor=None,
+                valor_normalizado=None,
+                status_leitura=status,
+                status_validacao=StatusValidacao.NAO_VERIFICAVEL,
+                motivos=[],
+            )
+            continue
+        valor = d.derivar(origem.valor_normalizado)
+        derivados[d.nome] = Campo(
+            valor=valor,
+            valor_normalizado=valor,
+            status_leitura=origem.status_leitura,
+            status_validacao=origem.status_validacao,
+            motivos=list(origem.motivos),
+        )
+    return derivados
 
 
 def decidir(
@@ -143,8 +193,9 @@ def decidir(
     validacao: ResultadoValidacao,
     aprovar_nao_verificavel: bool,
     sinalizacoes_captura: list[Sinalizacao] | None = None,
+    critico_ausente_422: bool = False,
 ) -> Decisao:
-    falha = _falha_sem_criticos(preparados)
+    falha = _falha_criticos(preparados, critico_ausente_422)
     if falha is not None:
         raise falha
 
@@ -204,6 +255,7 @@ def decidir(
             motivos=list(dict.fromkeys(motivos)),
         )
 
+    campos.update(campos_derivados(leitura.subtipo, campos))
     aprovado = bool(bloqueios) and all(not razoes for razoes in bloqueios.values())
     return Decisao(
         status=StatusDocumento.APROVADO if aprovado else StatusDocumento.REVISAO,

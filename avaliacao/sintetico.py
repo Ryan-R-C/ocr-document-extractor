@@ -33,7 +33,11 @@ from app.providers.fake.gravacoes import (
     ReleituraGravada,
 )
 from app.providers.interfaces import QualidadeCaptura
-from app.schemas.campos import SUBTIPOS_POR_TIPO, DefinicaoCampo, campos_do_subtipo
+from app.regras import digitos
+from app.regras.base import idade, somar_anos
+from app.regras.conjuntos.cin import prazo_cin
+from app.regras.conjuntos.cnh import LEI_14071_VIGENCIA, teto_antes_de_2021, teto_desde_2021
+from app.schemas.campos import SUBTIPOS_POR_TIPO, DefinicaoCampo, Verificador, campos_do_subtipo
 from app.schemas.normalizacao import TipoValor
 from avaliacao.gabarito import ItemGabarito, Qualidade, ValorGabarito, escrever_manifesto
 from avaliacao.particao import atribuir_particoes
@@ -80,12 +84,52 @@ def _data(rng: random.Random, inicio: date, fim: date) -> str:
     return dia.strftime("%d/%m/%Y")
 
 
+_TAMANHOS_DV = {
+    Verificador.CNH: 11,
+    Verificador.PIS: 11,
+    Verificador.TITULO_ELEITOR: 12,
+    Verificador.CNS: 15,
+}
+
+
+def _com_dv(rng: random.Random, verificador: Verificador) -> str:
+    """Número com dígito verificador válido, sorteado com o `rng` (determinístico)."""
+    while True:
+        if verificador is Verificador.CNPJ:
+            candidato = "".join(str(rng.randint(0, 9)) for _ in range(14))
+        else:
+            tamanho = _TAMANHOS_DV[verificador]
+            candidato = "".join(str(rng.randint(0, 9)) for _ in range(tamanho))
+        if digitos.verificar(verificador, candidato):
+            return candidato
+
+
+def _rg(rng: random.Random, uf: UF) -> str:
+    if uf is UF.SP:
+        base = "".join(str(rng.randint(1, 9)) for _ in range(8))
+        d = base + digitos.dv_rg_sp(base)
+        return f"{d[:2]}.{d[2:5]}.{d[5:8]}-{d[8]}"
+    d = "".join(str(rng.randint(0, 9)) for _ in range(8))
+    return f"{d[:2]}.{d[2:5]}.{d[5:]}-{rng.randint(0, 9)}"
+
+
 def _valor(rng: random.Random, definicao: DefinicaoCampo, uf: UF) -> str:
     nome = definicao.nome
     tipo = definicao.tipo_valor
     if tipo is TipoValor.CPF:
         return gerar_cpf(rng)
-    if tipo is TipoValor.DATA:
+    if nome == "numero_rg":
+        return _rg(rng, uf)
+    if nome == "numero_ctps":
+        return "".join(str(rng.randint(0, 9)) for _ in range(7))
+    if nome == "serie_ctps":
+        return "".join(str(rng.randint(0, 9)) for _ in range(4))
+    if nome == "contrato_cbo":
+        return "".join(str(rng.randint(0, 9)) for _ in range(6))
+    if definicao.verificador in _TAMANHOS_DV or definicao.verificador is Verificador.CNPJ:
+        assert definicao.verificador is not None
+        return _com_dv(rng, definicao.verificador)
+    if tipo in (TipoValor.DATA, TipoValor.VALIDADE):
         if nome == "data_nascimento":
             return _data(rng, date(1950, 1, 1), date(2005, 12, 31))
         if nome == "validade":
@@ -103,7 +147,8 @@ def _valor(rng: random.Random, definicao: DefinicaoCampo, uf: UF) -> str:
         d = "".join(str(rng.randint(0, 9)) for _ in range(8))
         return f"{d[:2]}.{d[2:5]}.{d[5:]}-{rng.randint(0, 9)}"
     if nome == "orgao_emissor":
-        return rng.choice(_ORGAOS)
+        # Quase sempre SSP/UF (coerente); às vezes um órgão fora da tabela (vai para revisão).
+        return f"SSP/{uf.value}" if rng.random() < 0.8 else rng.choice(_ORGAOS)
     if nome.startswith("nome") or nome.startswith("filiacao") or nome == "contrato_empregador":
         return " ".join(_palavra(rng) for _ in range(3))
     return " ".join(_palavra(rng) for _ in range(2))
@@ -114,6 +159,41 @@ class _Desenho:
     imagem: Image.Image
     caixas: dict[str, tuple[int, int, int, int]]
     palavras: list[PalavraGravada]
+
+
+def _br(dia: date) -> str:
+    return dia.strftime("%d/%m/%Y")
+
+
+def _de_br(texto: str) -> date:
+    dia, mes, ano = (int(p) for p in texto.split("/"))
+    return date(ano, mes, dia)
+
+
+def _coerentes(rng: random.Random, subtipo: Subtipo, valores: dict[str, str]) -> None:
+    """Datas coerentes entre si, como num documento real, para as regras da Fase 3."""
+    if "data_nascimento" not in valores:
+        return
+    nascimento = _de_br(valores["data_nascimento"])
+    if "primeira_habilitacao" in valores:
+        primeira = somar_anos(nascimento, rng.randint(18, 30))
+        valores["primeira_habilitacao"] = _br(primeira)
+        if "data_emissao" in valores and _de_br(valores["data_emissao"]) < primeira:
+            valores["data_emissao"] = _br(primeira + timedelta(days=rng.randint(0, 3000)))
+    if subtipo is Subtipo.CIN and {"data_expedicao", "validade"} <= valores.keys():
+        expedicao = _de_br(valores["data_expedicao"])
+        prazo = prazo_cin(idade(nascimento, expedicao))
+        valores["validade"] = (
+            "INDETERMINADA" if prazo is None else _br(somar_anos(expedicao, prazo))
+        )
+    if subtipo is Subtipo.CNH and {"data_emissao", "validade"} <= valores.keys():
+        emissao = _de_br(valores["data_emissao"])
+        anos = idade(nascimento, emissao)
+        teto = teto_desde_2021(anos) if emissao >= LEI_14071_VIGENCIA else teto_antes_de_2021(anos)
+        valores["validade"] = _br(somar_anos(emissao, teto))
+    if {"contrato_admissao", "contrato_saida"} <= valores.keys():
+        a, b = sorted((_de_br(valores["contrato_admissao"]), _de_br(valores["contrato_saida"])))
+        valores["contrato_admissao"], valores["contrato_saida"] = _br(a), _br(b)
 
 
 def _desenhar(
@@ -258,6 +338,7 @@ def gerar(
             for defn in definicoes:
                 if defn.critico or rng.random() < 0.6:
                     valores[defn.nome] = _valor(rng, defn, uf)
+            _coerentes(rng, subtipo, valores)
 
         desenho = _desenhar(subtipo, valores, definicoes, qualidade, indice)
         buffer = io.BytesIO()

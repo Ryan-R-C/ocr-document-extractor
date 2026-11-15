@@ -26,6 +26,8 @@ class TipoValor(StrEnum):
     ALFANUMERICO = "ALFANUMERICO"
     UF = "UF"
     CATEGORIA_CNH = "CATEGORIA_CNH"
+    # Data, ou validade indeterminada impressa por extenso (CIN de quem tem 60 anos ou mais).
+    VALIDADE = "VALIDADE"
 
 
 _SEPARADORES_DOC = re.compile(r"[\s.\-/]")
@@ -74,6 +76,16 @@ def _data(valor: str) -> str | None:
         return None
 
 
+INDETERMINADA = "INDETERMINADA"
+_INDETERMINADA = re.compile(r"^INDETERMINAD[AO]$")
+
+
+def _validade(valor: str) -> str | None:
+    if _INDETERMINADA.match(valor.strip().upper()):
+        return INDETERMINADA
+    return _data(valor)
+
+
 def _uf(valor: str) -> str | None:
     bruto = valor.strip().upper()
     return bruto if bruto in _UFS else None
@@ -93,6 +105,7 @@ NORMALIZADORES: dict[TipoValor, Callable[[str], str | None]] = {
     TipoValor.ALFANUMERICO: _alfanumerico,
     TipoValor.UF: _uf,
     TipoValor.CATEGORIA_CNH: _categoria_cnh,
+    TipoValor.VALIDADE: _validade,
 }
 
 

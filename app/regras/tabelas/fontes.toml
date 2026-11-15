@@ -1,0 +1,31 @@
+# Metadados das tabelas de referência das regras. A versão de cada tabela entra na
+# versão do conjunto de regras (e, por ela, em versao_pipeline).
+# Tabela sem arquivo: as regras que dependem dela devolvem NAO_VERIFICAVEL.
+
+[orgaos_emissores]
+arquivo = "orgaos_emissores.csv"
+fonte = "Definição do responsável pelo projeto em 2026-11-12: órgão emissor no formato SSP/UF"
+extraido_em = "2026-11-12"
+versao = "2026-11-12"
+atualizar = "editar o CSV (sigla,uf) e registrar a fonte aqui"
+
+[municipios]
+arquivo = "municipios.csv"
+fonte = "IBGE, API de localidades: https://servicodados.ibge.gov.br/api/v1/localidades/municipios"
+extraido_em = ""
+versao = ""
+atualizar = "uv run tabelas municipios [--arquivo municipios.json]"
+
+[municipios_historicos]
+arquivo = "municipios_historicos.csv"
+fonte = "Nomes anteriores de municípios (uf,nome_historico,nome_atual); a preencher"
+extraido_em = ""
+versao = ""
+atualizar = "editar o CSV e registrar a fonte aqui"
+
+[cbo]
+arquivo = "cbo.csv"
+fonte = "MTE, CBO 2002, arquivo 'CBO2002 - Ocupacao.csv': https://cbo.mte.gov.br/cbosite/pages/downloads.jsf"
+extraido_em = ""
+versao = ""
+atualizar = "uv run tabelas cbo --arquivo 'CBO2002 - Ocupacao.csv' (o site exige captcha: baixe à mão)"

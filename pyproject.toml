@@ -21,6 +21,7 @@ dependencies = [
     "opencv-contrib-python>=4.10,<5",
     "openai>=3.44,<4",
     "numpy>=2",
+    "validate-docbr==2.0.1",
 ]
 
 [project.scripts]
@@ -31,6 +32,7 @@ limpeza = "app.armazenamento.limpeza:main"
 medir-ocr = "avaliacao.medir_ocr:main"
 revisao = "avaliacao.revisao:main"
 trabalhador = "app.trabalhador:main"
+tabelas = "app.regras.tabelas.atualizar:main"
 
 [project.optional-dependencies]
 ocr = [

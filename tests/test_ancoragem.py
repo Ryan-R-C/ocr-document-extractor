@@ -354,7 +354,8 @@ def test_executar_sem_caixa_e_com_erro_do_provider() -> None:
             "principal",
         )
     )
-    assert erro["cpf"].motivo_nao_executada.startswith("erro_provider")
+    motivo = erro["cpf"].motivo_nao_executada
+    assert motivo is not None and motivo.startswith("erro_provider")
 
 
 @pytest.mark.parametrize("texto", ["111.444.777-35", "111 444 777 35"])

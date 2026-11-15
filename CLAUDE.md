@@ -73,7 +73,7 @@ docs/
 
 Do plano: Python, FastAPI, Pydantic, OpenCV, Pillow, PyMuPDF, PaddleOCR, validate-docbr, PostgreSQL, armazenamento compatível com S3, contêineres Docker escalando horizontalmente.
 
-Adotado (ver `docs/decisoes.md`): Python 3.12, uv, pydantic-settings, SQLAlchemy 2 + Alembic, structlog, pypdfium2 (no lugar do PyMuPDF, AGPL), pillow-heif (HEIC), RustFS como S3 local (a imagem do MinIO saiu do Docker Hub), pytest, moto, ruff, mypy; na Fase 1, OpenCV (pré-processamento) e o SDK `openai` 3.x (Responses API); na Fase 2, PaddleOCR 3.x + PaddlePaddle 3.x em CPU (extra `ocr`), o que troca o `opencv-python-headless` pelo `opencv-contrib-python` exigido pelo PaddleX.
+Adotado (ver `docs/decisoes.md`): Python 3.12, uv, pydantic-settings, SQLAlchemy 2 + Alembic, structlog, pypdfium2 (no lugar do PyMuPDF, AGPL), pillow-heif (HEIC), RustFS como S3 local (a imagem do MinIO saiu do Docker Hub), pytest, moto, ruff, mypy; na Fase 1, OpenCV (pré-processamento) e o SDK `openai` 3.x (Responses API); na Fase 2, PaddleOCR 3.x + PaddlePaddle 3.x em CPU (extra `ocr`), o que troca o `opencv-python-headless` pelo `opencv-contrib-python` exigido pelo PaddleX; na Fase 3, validate-docbr 2.0.1 (dígitos verificadores).
 
 ## Convenções
 
@@ -111,6 +111,7 @@ Atualize esta seção à medida que os comandos existirem.
 - `uv run limpeza [--loop]`: job de limpeza do TTL
 - `uv run medir-ocr --imagens <dir> [--limite N]`: tempo e memória do PaddleOCR por imagem (rodar no container)
 - `uv run revisao exportar|importar`: casos em revisão para conferência humana e de volta ao gabarito (ver `docs/gabarito.md`)
+- `uv run tabelas municipios [--arquivo]` / `uv run tabelas cbo --arquivo`: atualiza as tabelas das regras (`app/regras/tabelas/fontes.toml`)
 
 ## Decisões em aberto — não decidir sozinho
 
@@ -125,9 +126,9 @@ Do plano:
 
 Levantadas na preparação do repositório:
 - Onde está o gabarito e em que formato: [A PREENCHER]
-- `NAO_VERIFICAVEL` em campo crítico bloqueia o `APROVADO`? Se bloquear, todo RG fora de SP vai para revisão, porque o dígito verificador só existe em SP.
+- ~~`NAO_VERIFICAVEL` em campo crítico bloqueia o `APROVADO`?~~: resolvido em 2026-11-12, bloqueia (configurável); todo RG fora de SP vai para revisão (decisão 101).
 - Contratos manuscritos da CTPS física: a tabela de campos os trata como informativos, mas a seção "Nunca fazer" os chama de campo manuscrito crítico.
-- Campo crítico `AUSENTE`: 422 ou revisão?
+- ~~Campo crítico `AUSENTE`: 422 ou revisão?~~: resolvido em 2026-11-12, revisão, configurável em `CRITICO_AUSENTE` (decisão 101).
 - Na releitura, "duas de três leituras concordam" sem o OCR entre elas (VLM principal + escalada) basta para aprovar? O padrão adotado é não: o campo fica em revisão, para respeitar "nenhum valor aprovado sem aparecer nas duas leituras".
 - PDF com várias páginas (CTPS): quais páginas processar e como juntar os campos.
 - Autenticação da API: o plano não define.

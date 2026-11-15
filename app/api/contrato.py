@@ -107,6 +107,12 @@ class MotivoCampo(StrEnum):
     CARACTERE_DUVIDOSO = "CARACTERE_DUVIDOSO"
     MANUSCRITO_SEM_DUPLA_LEITURA = "MANUSCRITO_SEM_DUPLA_LEITURA"
     REGRA_NAO_IMPLEMENTADA = "REGRA_NAO_IMPLEMENTADA"
+    # Fase 3: a regra existe, mas não dá para verificar (sem DV na UF, dado de apoio ausente).
+    VALIDACAO_INDISPONIVEL = "VALIDACAO_INDISPONIVEL"
+    # O valor contradiz outro campo do próprio documento (órgão × UF, MRZ × impresso...).
+    VALOR_INCOERENTE = "VALOR_INCOERENTE"
+    # O valor não está na tabela de referência (CBO, município, categoria).
+    FORA_DA_TABELA = "FORA_DA_TABELA"
 
 
 class Sinalizacao(StrEnum):
@@ -149,6 +155,8 @@ class MotivoErro(StrEnum):
     DOCUMENTO_CORTADO = "DOCUMENTO_CORTADO"
     REFLEXO_EXCESSIVO = "REFLEXO_EXCESSIVO"
     CAMPO_CRITICO_ILEGIVEL = "CAMPO_CRITICO_ILEGIVEL"
+    # Só com CRITICO_AUSENTE=422 (o padrão manda para revisão).
+    CAMPO_CRITICO_AUSENTE = "CAMPO_CRITICO_AUSENTE"
     # 502 / 504
     PROVIDER_INDISPONIVEL = "PROVIDER_INDISPONIVEL"
     TEMPO_ESGOTADO = "TEMPO_ESGOTADO"

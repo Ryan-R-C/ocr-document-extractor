@@ -48,7 +48,7 @@ def test_fluxo_completo_igual_ao_sincrono(cliente, servico, gravar, objetos) -> 
     final = cliente.get(f"/v1/extracoes/{id_proc}")
     assert final.status_code == 200
     corpo = final.json()
-    assert corpo["id_processamento"] == id_proc and corpo["status"] == "REVISAO"
+    assert corpo["id_processamento"] == id_proc and corpo["status"] == "APROVADO"
     assert corpo["campos"]["cpf"]["valor_normalizado"]
     # O mesmo documento pelo síncrono dá o mesmo corpo (a menos do id).
     sincrono = cliente.post(
@@ -124,7 +124,7 @@ def test_cache_conclui_sem_passar_pela_fila(cliente, servico, gravar) -> None:
     assert servico.fila.obter(id_proc) is None  # não entrou na fila
     corpo = cliente.get(f"/v1/extracoes/{id_proc}").json()
     assert corpo["id_processamento"] == id_proc != primeiro
-    assert corpo["status"] == "REVISAO"
+    assert corpo["status"] == "APROVADO"
 
 
 def test_erro_transitorio_volta_para_a_fila_e_esgota(cliente, servico, gravar) -> None:

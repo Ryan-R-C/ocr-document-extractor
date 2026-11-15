@@ -49,11 +49,11 @@ não travar a fase, mas precisa do seu aval.
 
 ### Decisão do documento
 
-12. **[confirmar] Campo crítico AUSENTE:** dá 422 só quando nenhum campo crítico foi lido.
+12. **(Substituída pela 101.) Campo crítico AUSENTE:** dá 422 só quando nenhum campo crítico foi lido.
     Se todos estão AUSENTE, o motivo é `LADO_SEM_DADOS`; havendo ILEGIVEL, é
     `CAMPO_CRITICO_ILEGIVEL`, um por campo. Com algum crítico lido, o documento vai para
     `REVISAO`.
-13. **[confirmar] `NAO_VERIFICAVEL` em campo crítico bloqueia `APROVADO` por padrão.**
+13. **`NAO_VERIFICAVEL` em campo crítico bloqueia `APROVADO` por padrão** (confirmado na 101).
     Configurável em `APROVAR_CRITICO_NAO_VERIFICAVEL`. Com o bloqueio, todo RG fora de SP
     vai para revisão.
 14. **Releitura "2 de 3" sem o OCR não aprova:** mantém o padrão do CLAUDE.md. A ancoragem
@@ -435,3 +435,119 @@ aprovado com as sugestões para as cinco dúvidas.
     com cartões de 1100 px: em 960 px o p50 cai de 10,2 para 9,2 s e o pico de memória de
     1,46 para 1,24 GB, sem perda de ancoragem; em 640 px a ancoragem cai 1 ponto. Em foto
     real (~1600 px após o recorte) o ganho tende a ser maior; decide-se no gabarito real.
+
+## 2026-11-12 · Fase 3
+
+### Fontes e respostas do responsável
+
+98. **[confirmar] Fontes legais sem conferência no texto oficial.** A rede deste ambiente
+    recusa os sites das referências (Planalto, Câmara, Arpen-SP, LegJur, Portal do Trânsito,
+    A Tarde, NetCPA, Barbieri, Banco Central) e os das tabelas oficiais (IBGE fecha a
+    conexão; o download da CBO exige captcha, que não foi contornado). As regras seguem a
+    tabela do plano e as respostas abaixo; toda fonte não conferida está marcada
+    `[confirmar]` no campo `fonte` da regra. Conferidos de fato: o validate-docbr 2.0.1
+    (código-fonte), o espécime TD1 do ICAO 9303 e o exemplo de CNPJ alfanumérico da
+    Receita (`12.ABC.345/01DE-35`), que passam nos testes.
+99. **Campo sem regra aplicável é `VALIDO`** (responsável, 2026-11-12). Com valor
+    normalizado e nenhuma regra que o avalie (o `nome`, por exemplo), a validação "não
+    tem falha"; a auditoria registra `sem_regra`. `NAO_VERIFICAVEL` fica para quando a
+    regra existe e não consegue verificar (RG fora de SP, data de apoio não lida, tabela
+    ausente). Campo sem valor normalizado é `NAO_VERIFICAVEL`. *Descartado:* tratar
+    "sem regra" como `NAO_VERIFICAVEL`, que, com o bloqueio, nunca aprovaria nada.
+100. **CTPS digital: número e série derivados do CPF** (responsável, 2026-11-12), em
+     campos separados (`numero_ctps` = 7 primeiros dígitos, `serie_ctps` = 4 últimos).
+     O código monta os dois a partir do CPF lido; eles não vão ao VLM, herdam leitura e
+     validação do CPF e são informativos. A regra "número = 7 primeiros do CPF" passa a
+     valer por construção.
+101. **Status do documento por campo crítico:**
+     - `NAO_VERIFICAVEL` crítico bloqueia `APROVADO` (responsável, 2026-11-12; confirma a
+       decisão 13), configurável em `APROVAR_CRITICO_NAO_VERIFICAVEL`. Com isso, todo RG
+       fora de SP vai para revisão;
+     - crítico `AUSENTE` com outro crítico lido vai para `REVISAO` (responsável), ou 422
+       `CAMPO_CRITICO_AUSENTE` com `CRITICO_AUSENTE=422`;
+     - crítico `ILEGIVEL` dá 422 `CAMPO_CRITICO_ILEGIVEL`, um motivo por campo, mesmo com
+       outros críticos lidos, como pede o prompt da Fase 3. Substitui a decisão 12, que só
+       dava 422 quando nenhum crítico era lido;
+     - todos os críticos `AUSENTE` continuam dando 422 `LADO_SEM_DADOS`.
+102. **[confirmar] Teto de validade da CNH:** desde 12/04/2021, 10 anos até os 69 e 3 a
+     partir dos 70. A faixa de 50 a 69 com 10 anos segue a resposta do responsável sobre
+     a Lei 15.428/2026 ("considerar 10 anos"); a data de início dessa lei não foi
+     conferida, então a regra vale desde 12/04/2021 (a CNH de 50 a 69 emitida entre 2021 e
+     a lei, com 5 anos, continua válida, porque prazo menor é permitido). Antes de
+     12/04/2021: 5 anos até 65 e 3 acima de 65. Idade na data de emissão; tolerância de
+     `REGRAS_CNH_VALIDADE_TOLERANCIA_DIAS` (31). Sem a data de emissão (campo informativo)
+     não se sabe qual tabela vale: a validade sai `NAO_VERIFICAVEL` e a CNH vai para
+     revisão.
+103. **Órgão emissor: tabela SSP/UF** (responsável, 2026-11-12), com as 27 UFs. Aceita
+     `SSP/SP`, `SSP-SP`, `SSP SP`, `SSPSP`, `S.S.P./SP` e `SSP` sem sufixo; sufixo diferente
+     da UF de emissão é `SUSPEITO`; órgão fora da tabela é `NAO_VERIFICAVEL` (e, por ser
+     crítico, revisão). A regra vale para o RG, como no plano; na CIN o órgão não tem
+     regra. Outros órgãos (IFP, DETRAN, PC, IIRGD...) entram editando o CSV, com fonte.
+
+### Dígitos verificadores
+
+104. **validate-docbr 2.0.1** (MIT) para CPF, CNPJ numérico e alfanumérico, CNH, PIS, título,
+     CNS e certidão; todos existem na versão instalada. O tamanho e o alfabeto exatos são
+     checados antes, porque o `CPF.validate` da biblioteca completa com zeros à esquerda um
+     número curto (isso seria corrigir o valor). DV falho que persiste depois da releitura é
+     `INVALIDO`.
+105. **[confirmar] RG de SP:** 8 dígitos com pesos 2 a 9, módulo 11; resto que dá 10 vira X
+     e 11 vira 0. Em SP, número fora de 8 + DV (modelo antigo) é `NAO_VERIFICAVEL`; fora de
+     SP também (`sem_dv_na_uf`); letra fora da posição do DV é `SUSPEITO`. O formato por UF
+     além de SP fica pendente: não há fonte com os formatos de cada UF.
+
+### Regras
+
+106. **Datas comuns:** ano mínimo 1900 (`INVALIDO`); data futura, exceto validade,
+     `INVALIDO`; expedição, emissão, 1ª habilitação e contratos antes do nascimento,
+     `INVALIDO`; idade no processamento fora de 14 a 120 anos, `SUSPEITO`. Limites em
+     `REGRAS_*`.
+107. **[confirmar] CIN:** validade pela idade na expedição: até 11 anos, 5; de 12 a 59, 10; a
+     partir de 60, indeterminada. O tipo `VALIDADE` aceita "INDETERMINADA"; indeterminada
+     antes dos 60 é `INVALIDO`; data com 60+ é `SUSPEITO`; diferença maior que
+     `REGRAS_CIN_VALIDADE_TOLERANCIA_DIAS` (31) para o prazo é `SUSPEITO`. Validade anterior
+     ao processamento sinaliza `DOCUMENTO_VENCIDO`.
+108. **MRZ (bônus):** TD1 de 3 × 30, com os quatro dígitos de controle; o número que passa de
+     9 caracteres continua nos dados opcionais. Confere nascimento, validade, CPF (quando o
+     número da MRZ tem 11 dígitos) e nomes (o último pode vir truncado). Tudo certo:
+     `MRZ_CONFERIDA`. Checksum ou conferência falha: o campo `mrz` fica `SUSPEITO`, sem
+     afetar os críticos; fora do formato: `NAO_VERIFICAVEL`. **QR fica pendente:** a esteira
+     não lê QR, e ausente ele não pesa contra (responsável, 2026-11-12).
+109. **[confirmar] RG antigo:** a partir de 01/03/2032 sinaliza `DOCUMENTO_VENCIDO`, exceto
+     para quem tinha 60 anos em 01/03/2022. A matrícula de certidão (32 dígitos no
+     documento de origem) é conferida só quando aparece: DVs, código 55 nas posições 9–10
+     e ano do registro entre o nascimento e o processamento; falha é `SUSPEITO`.
+110. **[confirmar] CTPS:**
+     - física: número com 7 dígitos (5 ou 6 em modelos antigos) e série com 4 (3 a 5);
+       fora disso, `SUSPEITO`;
+     - CNPJ alfanumérico em contrato com admissão antes de 31/07/2026: `SUSPEITO`;
+     - saída antes da admissão, ou admissão antes dos 14 anos: `SUSPEITO`;
+     - moeda do salário pela data de admissão: Cr$ (até 12/02/1967), NCr$ (13/02/1967 a
+       14/05/1970), Cr$ (15/05/1970 a 27/02/1986), Cz$ (28/02/1986 a 15/01/1989), NCz$
+       (16/01/1989 a 15/03/1990), Cr$ (16/03/1990 a 31/07/1993), CR$ (01/08/1993 a
+       30/06/1994), R$ (desde 01/07/1994), com folga de 180 dias depois de cada troca. As
+       datas vêm de memória, sem conferência no Banco Central. `CR$` em caixa alta pode ser
+       o cruzeiro transcrito em maiúsculas e aceita os dois períodos. O plano não lista o
+       NCr$, que aparece em contratos de 1967 a 1970;
+     - digital: CBO do contrato (novo campo informativo `contrato_cbo`) na tabela oficial.
+111. **Tabelas versionadas** em `app/regras/tabelas/` (`fontes.toml` com fonte, data e
+     versão; `uv run tabelas municipios|cbo` para atualizar). IBGE e CBO estão ausentes
+     até alguém baixá-las (decisão 98); enquanto isso, naturalidade e CBO saem
+     `NAO_VERIFICAVEL`, e os dois campos são informativos. A versão das tabelas entra em
+     `VERSAO_REGRAS` (`1.0-<hash>`), e daí em `versao_pipeline`.
+112. **Data do processamento** no fuso `REGRAS_FUSO` (America/Sao_Paulo);
+     `REGRAS_DATA_PROCESSAMENTO` fixa a data para uma avaliação reproduzível. A prorrogação
+     do Contran (vencidas de 05/06 a 08/12/2026 valem até 09/12/2026) deixa de ter efeito
+     sozinha depois de 09/12/2026.
+
+### Avaliação
+
+113. **Gabarito sintético coerente com as regras:** DVs válidos onde há verificador (RG de
+     SP, CNH, PIS, título, CNS, CNPJ), órgão SSP/UF em 80% dos RGs, validade da CIN e da
+     CNH pelo prazo, 1ª habilitação depois dos 18, contratos com admissão antes da saída.
+     As UFs sorteadas continuam as 8 primeiras, sem SP: no sintético todo RG vai para
+     revisão (decisão 101).
+114. **Teste do campo apagado com o OCR da variante:** o teste copiava para a variante a
+     leitura do OCR fake do original, que ainda "via" o valor apagado. Com as regras
+     ativas, isso aprovava a alucinação. Agora as palavras dentro da caixa apagada saem da
+     gravação, como faria o OCR real sobre a imagem borrada.
