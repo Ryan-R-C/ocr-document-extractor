@@ -616,3 +616,12 @@ paralelo (diagnóstico, confiança, recálculo da decisão, estimativa de custo)
      as chamadas em voo terminam (excedente de até `concorrencia` documentos) e o relatório
      parcial é gravado, servindo de `--base` na próxima. No modo Batch só vale o bloqueio
      pela estimativa. Com provider `fake`, custo zero e nada bloqueado.
+
+### Rascunho do relatório do portão (`avaliacao/portao.py`)
+
+127. **`uv run portao` só lê os `relatorio.json`** (ajuste, holdout e baselines da Fase 1) e
+     não recalcula métricas. Veredito combinado: "NÃO PASSOU" se alguma meta está violada,
+     "PASSOU" só com as duas demonstradas, "INCONCLUSIVO" no resto; sem holdout, é
+     provisório. `versao_pipeline` diferente entre ajuste e holdout invalida o veredito.
+     Baseline de outra partição sai das tabelas por dimensão (populações diferentes).
+     Descartado: usar o veredito pontual da seção "Metas" (decisão 121).
