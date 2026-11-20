@@ -112,6 +112,9 @@ class Rastro:
     caixas: dict[str, Caixa] = field(default_factory=dict)
     recortes: dict[str, bytes] = field(default_factory=dict)
     releituras: dict[str, ResultadoReleitura] = field(default_factory=dict)
+    # Campos depois da releitura: o que entra nas regras e na decisão. Fica no rastro para o
+    # avaliador recalcular a decisão com outras opções sem chamar provider de novo.
+    preparados: dict[str, CampoPreparado] = field(default_factory=dict)
     validacao: ResultadoValidacao | None = None
     decisao: Decisao | None = None
     chamadas: list[MetricasChamada] = field(default_factory=list)
@@ -385,6 +388,7 @@ class Esteira:
                 if r.releitura is not None:
                     rastro.chamadas.append(r.releitura.metricas)
             preparados = mod_decisao.aplicar_releituras(preparados, rastro.releituras)
+            rastro.preparados = preparados
 
         # 6. Regras (de novo, sobre os valores depois da releitura) e decisão
         with rastro.cronometro("regras"):

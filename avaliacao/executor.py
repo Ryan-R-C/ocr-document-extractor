@@ -21,7 +21,7 @@ from app.montagem import criar_esteira
 from app.preprocess.decodificacao import ArquivoRecebido, detectar_formato
 from app.providers.fabrica import ProviderNaoImplementado, criar_dependencias_batch
 from app.providers.interfaces import ModoChamada
-from avaliacao import campo_apagado, metricas, relatorio
+from avaliacao import campo_apagado, metricas, redecisao, relatorio
 from avaliacao.campo_apagado import METODOS, LocalizadorValorPorOCR, Metodo
 from avaliacao.gabarito import ItemGabarito, Particao, ler_manifesto, sha256_arquivo
 
@@ -151,6 +151,7 @@ async def avaliar(
     registros = metricas.Registros()
     for item, resultado in await asyncio.gather(*tarefas):
         metricas.registrar(registros, item, resultado)
+        redecisao.registrar(registros, item, resultado, settings)
 
     resultado_final = {
         "execucao": {
