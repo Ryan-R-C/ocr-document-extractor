@@ -1,6 +1,8 @@
 """Linha de comando do avaliador e do gabarito.
 
 avaliar --config <arquivo.toml> --particao <ajuste|holdout> [--modo padrao|batch|flex]
+        [--estimar] [--base relatorio.json] [--taxa-releitura N] [--orcamento-brl R$]
+        [--gabarito manifesto.jsonl]
 
 gabarito sintetico    --saida DIR [--quantidade N] [--semente S]
 gabarito importar-csv --csv ARQ --imagens DIR --saida MANIFESTO
@@ -23,6 +25,9 @@ from app.providers.interfaces import ModoChamada
 
 
 def main_avaliar(argv: list[str] | None = None) -> int:
+    from app.config import Settings
+    from app.providers.custo import PrecoDesconhecido
+    from avaliacao import estimativa
     from avaliacao.executor import ConfigAvaliacao, ModoNaoImplementado, avaliar
 
     parser = argparse.ArgumentParser(prog="avaliar", description="Roda a esteira sobre o gabarito.")
@@ -30,6 +35,26 @@ def main_avaliar(argv: list[str] | None = None) -> int:
     parser.add_argument("--particao", choices=["ajuste", "holdout"], required=True)
     parser.add_argument("--modo", choices=[m.value for m in ModoChamada], default=None)
     parser.add_argument("--saida", type=Path, default=None)
+    parser.add_argument(
+        "--estimar",
+        action="store_true",
+        help="só imprime chamadas, tokens e custo estimados; não chama nenhum provider",
+    )
+    parser.add_argument(
+        "--base", type=Path, default=None, help="relatorio.json de uma rodada com tokens medidos"
+    )
+    parser.add_argument(
+        "--taxa-releitura", type=float, default=None, help="releituras por documento (padrão 0,6)"
+    )
+    parser.add_argument(
+        "--orcamento-brl",
+        type=float,
+        default=None,
+        help="teto da rodada em R$ (sobrescreve a config)",
+    )
+    parser.add_argument(
+        "--gabarito", type=Path, default=None, help="manifesto no lugar do da config"
+    )
     args = parser.parse_args(argv)
 
     configurar_logs("WARNING", json=False)
@@ -38,15 +63,55 @@ def main_avaliar(argv: list[str] | None = None) -> int:
         config.modo = ModoChamada(args.modo)
     if args.saida:
         config.saida = args.saida
+    if args.gabarito:
+        config.gabarito = args.gabarito.resolve()
+    if args.base:
+        config.estimativa.base = args.base.resolve()
+    if args.taxa_releitura is not None:
+        if args.taxa_releitura < 0:
+            parser.error("--taxa-releitura não pode ser negativa")
+        config.estimativa.taxa_releitura = args.taxa_releitura
+    if args.orcamento_brl is not None:
+        if args.orcamento_brl <= 0:
+            parser.error("--orcamento-brl precisa ser positivo")
+        config.orcamento_brl = args.orcamento_brl
+    if args.estimar:
+        try:
+            previsto = estimativa.estimar(
+                config, args.particao, Settings(**config.settings), config.orcamento_brl
+            )
+        except (PrecoDesconhecido, ValueError, OSError) as erro:
+            print(f"erro: {erro}", file=sys.stderr)
+            return 2
+        print(previsto.texto())
+        return 3 if previsto.cabe_no_orcamento is False else 0
     try:
         relatorio, pasta = asyncio.run(avaliar(config, args.particao))
     except ModoNaoImplementado as erro:
         print(f"erro: {erro}", file=sys.stderr)
         return 2
+    except estimativa.OrcamentoInsuficiente as erro:
+        print(f"erro: {erro}", file=sys.stderr)
+        return 3
     metas = relatorio["metricas"]["metas"]
     print(f"relatório: {pasta / 'relatorio.md'}")
     for nome, meta in metas.items():
         print(f"  {nome}: {meta['valor']} (meta atingida: {meta['atingida']})")
+    orcamento = relatorio["execucao"].get("orcamento")
+    if orcamento:
+        print(
+            f"orçamento: R$ {orcamento['custo_medido_brl']:.2f} medido de "
+            f"R$ {orcamento['limite_brl']:.2f} (estimativa alta "
+            f"R$ {orcamento['estimativa_alta_brl']:.2f})"
+        )
+        if orcamento["interrompida"]:
+            print(
+                "erro: rodada interrompida por orçamento; "
+                f"{orcamento['documentos_processados']} de {orcamento['documentos_previstos']} "
+                "documentos processados",
+                file=sys.stderr,
+            )
+            return 3
     return 0
 
 
