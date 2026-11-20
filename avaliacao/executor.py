@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 import time
 import tomllib
@@ -21,8 +22,9 @@ from app.montagem import criar_esteira
 from app.preprocess.decodificacao import ArquivoRecebido, detectar_formato
 from app.providers.fabrica import ProviderNaoImplementado, criar_dependencias_batch
 from app.providers.interfaces import ModoChamada
-from avaliacao import campo_apagado, metricas, redecisao, relatorio
+from avaliacao import campo_apagado, estimativa, metricas, redecisao, relatorio
 from avaliacao.campo_apagado import METODOS, LocalizadorValorPorOCR, Metodo
+from avaliacao.estimativa import ConfigEstimativa, GuardaOrcamento, OrcamentoInsuficiente
 from avaliacao.gabarito import ItemGabarito, Particao, ler_manifesto, sha256_arquivo
 
 
@@ -50,6 +52,10 @@ class ConfigAvaliacao(BaseModel):
     # Sobrescreve variáveis de app.config (mesmos nomes, em minúsculas).
     settings: dict[str, Any] = Field(default_factory=dict)
     campo_apagado: ConfigCampoApagado = Field(default_factory=ConfigCampoApagado)
+    # Teto em R$ da rodada: bloqueia antes de começar se a estimativa alta passar dele e
+    # interrompe quando o custo medido passar (ver avaliacao/estimativa.py).
+    orcamento_brl: float | None = Field(default=None, gt=0)
+    estimativa: ConfigEstimativa = Field(default_factory=ConfigEstimativa)
 
     @classmethod
     def carregar(cls, caminho: Path) -> ConfigAvaliacao:
@@ -58,6 +64,8 @@ class ConfigAvaliacao(BaseModel):
         base = caminho.parent
         if not config.gabarito.is_absolute():
             config.gabarito = (base / config.gabarito).resolve()
+        if config.estimativa.base is not None and not config.estimativa.base.is_absolute():
+            config.estimativa.base = (base / config.estimativa.base).resolve()
         return config
 
 
@@ -92,6 +100,17 @@ async def avaliar(
 ) -> tuple[dict[str, Any], Path]:
     """Roda a avaliação e grava `relatorio.md` e `relatorio.json`. Devolve (relatório, pasta)."""
     settings = settings or Settings(**config.settings)
+    # Orçamento: nada é criado nem chamado se a estimativa alta já passa do teto.
+    com_orcamento = config.orcamento_brl is not None and estimativa.cobra(settings)
+    previsto: estimativa.Estimativa | None = None
+    if com_orcamento:
+        previsto = estimativa.estimar(config, particao, settings, config.orcamento_brl)
+        if not previsto.cabe_no_orcamento:
+            raise OrcamentoInsuficiente(
+                f"estimativa alta R$ {previsto.brl.alta:.2f} passa do orçamento "
+                f"R$ {config.orcamento_brl:.2f}; nenhuma chamada foi feita "
+                "(rode com --estimar para ver o detalhe)"
+            )
     if config.modo is ModoChamada.BATCH:
         # Estado estável (sem data no nome) para retomar a rodada de onde parou.
         estado = config.saida / "batch" / f"{config.nome}-{particao}"
@@ -102,6 +121,11 @@ async def avaliar(
     else:
         # Flex vai em cada chamada (service_tier) pelo próprio adaptador.
         esteira = criar_esteira(settings)
+    guarda: GuardaOrcamento | None = None
+    if com_orcamento:
+        assert config.orcamento_brl is not None
+        guarda = GuardaOrcamento(esteira.deps.leitor_visual, config.orcamento_brl)
+        esteira.deps = dataclasses.replace(esteira.deps, leitor_visual=guarda)
     inicio = agora or datetime.now(UTC)
     relogio = time.perf_counter()
 
@@ -143,15 +167,28 @@ async def avaliar(
         max(1, total) if config.modo is ModoChamada.BATCH else config.concorrencia
     )
 
-    async def um(diretorio: Path, item: ItemGabarito) -> tuple[ItemGabarito, ResultadoPipeline]:
+    async def um(
+        diretorio: Path, item: ItemGabarito
+    ) -> tuple[ItemGabarito, ResultadoPipeline] | None:
         async with semaforo:
-            return item, await _processar(esteira, diretorio, item, config.modo)
+            if guarda is not None and guarda.estourado:
+                return None  # orçamento esgotado: o documento nem começa
+            try:
+                return item, await _processar(esteira, diretorio, item, config.modo)
+            except (estimativa.OrcamentoEsgotado, ExceptionGroup) as erro:
+                if estimativa.eh_orcamento_esgotado(erro):
+                    return None
+                raise
 
     tarefas = [um(dir_gabarito, i) for i in itens] + [um(dir_variantes, v) for v in variantes.itens]
     registros = metricas.Registros()
-    for item, resultado in await asyncio.gather(*tarefas):
-        metricas.registrar(registros, item, resultado)
-        redecisao.registrar(registros, item, resultado, settings)
+    processados = 0
+    for par in await asyncio.gather(*tarefas):
+        if par is not None:
+            processados += 1
+            item, resultado = par
+            metricas.registrar(registros, item, resultado)
+            redecisao.registrar(registros, item, resultado, settings)
 
     resultado_final = {
         "execucao": {
@@ -184,8 +221,29 @@ async def avaliar(
             (settings.leitor_visual_modelo, settings.leitor_visual_modelo_escalada),
         ),
     }
+    interrompida = guarda is not None and guarda.estourado
+    if guarda is not None and previsto is not None:
+        resultado_final["execucao"]["orcamento"] = {
+            "limite_brl": guarda.limite_brl,
+            "estimativa_alta_brl": previsto.brl.alta,
+            "estimativa_central_brl": previsto.brl.central,
+            "custo_medido_brl": guarda.gasto_brl,
+            "chamadas_medidas": guarda.chamadas,
+            "chamadas_recusadas": guarda.recusadas,
+            "interrompida": interrompida,
+            "documentos_processados": processados,
+            "documentos_previstos": len(tarefas),
+        }
+    texto_md = relatorio.markdown(resultado_final)
+    if interrompida:
+        assert guarda is not None
+        texto_md = (
+            f"> **Rodada interrompida por orçamento.** Custo medido R$ {guarda.gasto_brl:.2f} "
+            f"passou do teto de R$ {guarda.limite_brl:.2f}; {processados} de {len(tarefas)} "
+            "documentos processados. As métricas abaixo cobrem só esses documentos.\n\n" + texto_md
+        )
     (pasta / "relatorio.json").write_text(
         json.dumps(resultado_final, ensure_ascii=False, indent=2, default=str), encoding="utf-8"
     )
-    (pasta / "relatorio.md").write_text(relatorio.markdown(resultado_final), encoding="utf-8")
+    (pasta / "relatorio.md").write_text(texto_md, encoding="utf-8")
     return resultado_final, pasta

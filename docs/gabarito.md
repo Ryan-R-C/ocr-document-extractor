@@ -53,6 +53,48 @@ uv run gabarito validar      --manifesto <dir>/manifesto.jsonl
 uv run gabarito estratificar --manifesto <dir>/manifesto.jsonl --saida saidas/estratificacao
 uv run gabarito apagar-campos --manifesto <dir>/manifesto.jsonl --saida saidas/variantes [--ocr]
 uv run avaliar --config <rodada.toml> --particao ajuste
+uv run avaliar --config <rodada.toml> --particao ajuste --estimar [--base <relatorio.json>]
+               [--taxa-releitura 0.6] [--orcamento-brl 50] [--gabarito <manifesto.jsonl>]
+```
+
+### Estimativa de custo e orçamento
+
+`--estimar` não chama nenhum provider (nem monta a esteira): lê o manifesto e o tamanho das
+imagens e imprime as imagens da partição, as variantes do campo apagado, as chamadas
+previstas por etapa (leitura única, ou classificação + extração; releitura), os tokens por
+chamada e o custo em US$ e R$, médio por documento e total, em faixa baixa / central / alta.
+A lógica está em `avaliacao/estimativa.py`.
+
+- **Tokens.** Com `--base` (ou `[estimativa] base` na rodada, relativo ao `.toml`), as
+  médias medidas no `relatorio.json` de uma rodada anterior, por etapa, quando o modelo é
+  o mesmo. Sem base: o plano (1.500 de instruções e schema + imagem; 600 de saída), com a
+  imagem contada pela regra do modelo (`MODELOS_IMAGEM`) no tamanho que vai ao provider e
+  o texto nunca abaixo do prompt + schema reais (~4 caracteres por token).
+- **Releitura.** `taxa_releitura` releituras por documento: o valor configurado, senão o
+  medido na base, senão 0,6 (plano: 30% dos documentos com dois campos relidos). Faixa da
+  metade ao dobro. Sem leitor de texto (`nenhum`) não há releitura.
+- **Faixa.** Tokens ± `folga_tokens` (25%; a alta usa o p95 medido se for maior) e, sem
+  caixa no gabarito com `usar_ocr_sem_caixa`, a baixa só conta as variantes certas.
+- **Preço.** `PRECOS_MODELOS`, fator do modo (`--modo batch|flex`) e `CAMBIO_USD_BRL`.
+
+`orcamento_brl` na rodada (ou `--orcamento-brl`) é um teto em R$:
+
+- antes de começar, se a estimativa **alta** passar do teto, a rodada não começa (código 3);
+- durante a rodada, o custo medido de cada chamada é somado; quando passa do teto, nenhuma
+  chamada nova sai, os documentos restantes não são processados e o relatório é gravado com
+  o que foi feito e a marca `execucao.orcamento.interrompida` (código 3). As chamadas que já
+  estavam em voo terminam e são cobradas: o excedente aceito é o delas (até `concorrencia`
+  documentos, cada um com a leitura ou as releituras em paralelo). No modo Batch todo o lote
+  está em voo; ali vale o bloqueio pela estimativa;
+- com provider `fake` o custo é zero e nada é bloqueado.
+
+```toml
+orcamento_brl = 50.0
+
+[estimativa]
+base = "../../saidas/avaliacoes/<rodada anterior>/relatorio.json"
+taxa_releitura = 0.6
+folga_tokens = 0.25
 ```
 
 O importador lê um CSV com as colunas `arquivo, tipo_documento, subtipo, uf, lado,
