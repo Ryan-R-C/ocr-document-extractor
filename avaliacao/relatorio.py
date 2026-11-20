@@ -298,4 +298,39 @@ def markdown(relatorio: dict[str, Any]) -> str:
             f"{sim[a['aprovado_medicao']]} | {sim[a['campo_apagado']]} |"
             for a in m["alucinacoes"]
         ]
+    linhas += _diagnostico(m.get("diagnostico"))
     return "\n".join(linhas) + "\n"
+
+
+def _diagnostico(diag: dict[str, Any] | None) -> list[str]:
+    """Etapa que deixou passar cada erro escapado ou alucinação em crítico aprovado."""
+    if diag is None:
+        return []
+    linhas = [
+        "",
+        "## Diagnóstico dos erros escapados e alucinações",
+        "",
+        "Campos críticos em documentos aprovados com valor errado ou inventado (inclui as "
+        "variantes do campo apagado), com a etapa que deixou passar. A sugestão é fixa por "
+        "categoria; a proposta de correção é escrita à mão.",
+        "",
+        "| Categoria | Casos |",
+        "|---|---|",
+    ]
+    linhas += [f"| {cat} | {n} |" for cat, n in diag["por_categoria"].items()]
+    if not diag["casos"]:
+        linhas += ["", "Nenhum erro escapado nem alucinação em campo crítico aprovado."]
+        return linhas
+    linhas += [
+        "",
+        "| Id | Campo | Subtipo | UF | Qualidade | Tipo | Categoria | Casamento | Regras | "
+        "Sugestão de onde corrigir |",
+        "|---|---|---|---|---|---|---|---|---|---|",
+    ]
+    linhas += [
+        f"| {c['id']} | {c['campo']} | {c['subtipo']} | {c['uf']} | {c['qualidade']} | "
+        f"{c['tipo']} | {c['categoria']} | {c['casamento_ancoragem'] or '—'} | "
+        f"{', '.join(c['regras']) or '—'} | {c['sugestao']} |"
+        for c in diag["casos"]
+    ]
+    return linhas

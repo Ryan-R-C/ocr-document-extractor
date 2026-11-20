@@ -35,6 +35,7 @@ from app.core import decisao
 from app.core.erros import FalhaExtracao
 from app.core.pipeline import ResultadoPipeline
 from app.schemas.campos import Escrita, definicao
+from avaliacao import diagnostico
 from avaliacao.gabarito import ItemGabarito
 
 META_ERRO_ESCAPADO = 0.005
@@ -117,6 +118,13 @@ class RegistroCampo:
     ancoragem_efetiva: str | None = None
     releitura: str | None = None  # None | EXECUTADA | NAO_EXECUTADA
     concordancia: str | None = None
+    # Diagnóstico (avaliacao/diagnostico.py): só booleanos, status e ids, nunca valores.
+    casamento_ancoragem: str | None = None  # Casamento da ancoragem efetiva
+    correto_releitura: bool | None = None  # a leitura da releitura confere com o gabarito
+    releitura_trocou_valor: bool = False  # valor final veio da releitura, sem o VLM
+    status_validacao: str | None = None  # status agregado das regras no campo
+    regras: tuple[str, ...] = ()  # ids das regras aplicadas ao campo
+    valor_de_outro_campo: bool = False  # valor errado = valor conferido de outro campo
 
     @property
     def alucinacao(self) -> bool:
@@ -281,6 +289,9 @@ def registrar(registros: Registros, item: ItemGabarito, resultado: ResultadoPipe
                 if rel is None
                 else ("EXECUTADA" if rel.executada else "NAO_EXECUTADA"),
                 concordancia=rel.concordancia if rel else None,
+                **diagnostico.evidencias(
+                    item, nome, rastro, devolvido.valor_normalizado if devolvido else None
+                ),
             )
         )
 
@@ -637,6 +648,7 @@ def calcular(
         "piores_casos": _piores_casos(docs, campos),
         "erros_escapados": erros_escapados,
         "alucinacoes": alucinacoes,
+        "diagnostico": diagnostico.calcular(todos_campos),
     }
 
 
