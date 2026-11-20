@@ -551,3 +551,68 @@ aprovado com as sugestões para as cinco dúvidas.
      leitura do OCR fake do original, que ainda "via" o valor apagado. Com as regras
      ativas, isso aprovava a alucinação. Agora as palavras dentro da caixa apagada saem da
      gravação, como faria o OCR real sobre a imagem borrada.
+
+## 2026-11-20 · Preparação do Portão 2+3 (avaliador)
+
+Feito antes do gabarito real, sobre o sintético e sem provider real. Quatro entregas em
+paralelo (diagnóstico, confiança, recálculo da decisão, estimativa de custo).
+
+### Diagnóstico da etapa que deixou passar (`avaliacao/diagnostico.py`)
+
+115. **Uma categoria por caso, por precedência:** `CAMPO_APAGADO` → `RELEITURA_INTRODUZIU`
+     → `DUPLA_LEITURA_CONCORDOU_ERRADO` → `ANCORAGEM_TOLERANTE_CONFUSAO` →
+     `ANCORAGEM_TOLERANTE_PONTUACAO` → `REGRAS_NAO_PEGARAM` → `VLM_ERROU_OCR_CONFIRMOU` →
+     `OUTRA`. Etapas mais específicas e mais tardias primeiro; com releitura trocando o valor
+     e o VLM principal também errado, a culpa vai para quem confirmou (a ancoragem).
+     Descartado: várias categorias por caso (contagem ambígua).
+116. **Tipo de casamento recalculado no avaliador** a partir das palavras do OCR que
+     ancoraram o campo (exato, pontuação ou confusão), sem mexer em `app/core/ancoragem.py`.
+     Com releitura confirmada, vale a ancoragem que aprovou o campo. Descartado: gravar o
+     tipo no `ResultadoAncoragem`.
+117. **`REGRAS_NAO_PEGARAM` = troca de campo:** com ancoragem exata, o erro passou pelo OCR
+     e pelas regras; conta como das regras só quando o valor errado é o valor de outro campo
+     do mesmo documento no gabarito. Os ids das regras aplicadas saem em todo caso, para
+     reclassificação manual. Descartados: "o campo tinha regra e deu VALIDO" (todo CPF
+     escapado viraria regra) e distância de edição (limiar arbitrário).
+118. **O registro guarda só booleanos, status e ids** (correto antes e depois da releitura,
+     casamento, status das regras, ids das regras), nunca valores (invariante 10).
+
+### Confiança estatística (`avaliacao/estatistica.py`, `confianca.py`)
+
+119. **Clopper-Pearson exato, sem scipy.** O veredito usa o limite superior unilateral de
+     95%: "demonstrada" (limite < meta), "não demonstrada por amostra pequena" ou "violada"
+     (taxa observada ≥ meta, ou qualquer alucinação). O relatório mostra também o IC
+     bilateral. Com 0 erros, a meta de 0,5% exige 598 críticos aprovados. Descartado: o
+     superior do bilateral (equivale a 97,5% unilateral).
+120. **Alucinação usa a mesma tolerância de 0,5% para "demonstrada"**, e qualquer
+     alucinação viola. Descartado: declarar a meta zero indemonstrável (status sem
+     informação).
+121. **A seção "Metas" continua com o veredito pontual** (taxa observada × meta); o
+     veredito estatístico fica na seção de confiança. O relatório do portão usa o
+     estatístico.
+
+### Recálculo da decisão (`avaliacao/redecisao.py`)
+
+122. **As 4 combinações de `APROVAR_CRITICO_NAO_VERIFICAVEL` × `CRITICO_AUSENTE` são
+     recalculadas chamando `decisao.decidir` de verdade** sobre os intermediários do
+     rastro. Só `Rastro.preparados` (campos depois da releitura) foi exposto; o pacote de
+     auditoria e o contrato não mudam. O resultado passa pelo próprio `metricas.registrar`.
+     A opção da rodada também é recalculada e comparada com a resposta da esteira;
+     divergência aparece no relatório. Conferido no sintético: idêntico às 4 rodadas reais.
+     Descartados: reimplementar a decisão no avaliador e rodar 4 vezes com provider pago.
+123. **"422 por motivo" nesta seção conta documentos**, não ocorrências (a métrica
+     `taxa_422_por_motivo` existente conta ocorrências).
+
+### Estimativa de custo e orçamento (`avaliacao/estimativa.py`)
+
+124. **`--estimar` não chama provider.** Tokens: médias medidas de um `relatorio.json`
+     anterior (`--base`, só para a mesma etapa e o mesmo modelo) ou o plano, mas nunca
+     abaixo do tamanho real do prompt + schema: no desenho único da identidade são cerca de
+     5.000 tokens de texto, contra 1.500 do plano. Faixa de ±25% nos tokens.
+125. **Taxa de releitura padrão 0,6 por documento** (premissa do plano), faixa de ×0,5 a ×2
+     até a calibração no gabarito real.
+126. **`orcamento_brl` comparado com a estimativa alta**, e a rodada não começa se passar.
+     Durante a rodada, novas chamadas são recusadas depois que o custo medido passa do teto;
+     as chamadas em voo terminam (excedente de até `concorrencia` documentos) e o relatório
+     parcial é gravado, servindo de `--base` na próxima. No modo Batch só vale o bloqueio
+     pela estimativa. Com provider `fake`, custo zero e nada bloqueado.
