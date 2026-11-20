@@ -35,7 +35,7 @@ from app.core import decisao
 from app.core.erros import FalhaExtracao
 from app.core.pipeline import ResultadoPipeline
 from app.schemas.campos import Escrita, definicao
-from avaliacao import diagnostico
+from avaliacao import confianca, diagnostico
 from avaliacao.gabarito import ItemGabarito
 
 META_ERRO_ESCAPADO = 0.005
@@ -649,6 +649,8 @@ def calcular(
         "erros_escapados": erros_escapados,
         "alucinacoes": alucinacoes,
         "diagnostico": diagnostico.calcular(todos_campos),
+        "confianca": confianca.calcular(registros, META_ERRO_ESCAPADO),
+        "comparacao_medicao": confianca.comparacao_medicao(registros, META_ERRO_ESCAPADO),
     }
 
 

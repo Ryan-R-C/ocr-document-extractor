@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from avaliacao import relatorio_confianca
+
 
 def _pct(valor: float | None) -> str:
     return "—" if valor is None else f"{valor * 100:.2f}%"
@@ -299,6 +301,7 @@ def markdown(relatorio: dict[str, Any]) -> str:
             for a in m["alucinacoes"]
         ]
     linhas += _diagnostico(m.get("diagnostico"))
+    linhas += relatorio_confianca.secoes(m)
     return "\n".join(linhas) + "\n"
 
 
