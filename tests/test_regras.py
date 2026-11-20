@@ -358,8 +358,9 @@ def test_matricula_de_certidao() -> None:
 
 
 def test_naturalidade_com_e_sem_tabela() -> None:
-    sem = validar(Subtipo.RG_ANTIGO, naturalidade="SAO PAULO - SP")
-    assert sem.por_campo["naturalidade"] is NV  # tabela do IBGE ainda ausente
+    vazias = Tabelas(orgaos={}, municipios=None, cbo=None, versoes={})
+    sem = validar(Subtipo.RG_ANTIGO, tabelas=vazias, naturalidade="SAO PAULO - SP")
+    assert sem.por_campo["naturalidade"] is NV  # sem tabela do IBGE
     tabelas = Tabelas(
         orgaos={},
         municipios={"SP": frozenset({"SAOPAULO", "MOGIDASCRUZES"})},
@@ -685,7 +686,12 @@ def test_tabelas_versionadas() -> None:
     tabelas = carregar()
     assert "SP" in tabelas.orgaos["SSP"] and len(tabelas.orgaos["SSP"]) == 27
     assert tabelas.versoes["orgaos_emissores"] == "2026-11-12"
-    assert tabelas.municipios is None and tabelas.cbo is None
+    # IBGE carregado (27 UFs, 5.571 municípios em 2026-11-20); a CBO ainda falta.
+    assert tabelas.municipios is not None and len(tabelas.municipios) == 27
+    assert sum(len(m) for m in tabelas.municipios.values()) >= 5500
+    assert "SAOPAULO" in tabelas.municipios["SP"]
+    assert tabelas.versoes["municipios"] == "2026-11-20"
+    assert tabelas.cbo is None
     assert {"ACC", "AE"} <= cnh.CATEGORIAS
 
 

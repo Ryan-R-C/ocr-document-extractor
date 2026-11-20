@@ -12,8 +12,8 @@ atualizar = "editar o CSV (sigla,uf) e registrar a fonte aqui"
 [municipios]
 arquivo = "municipios.csv"
 fonte = "IBGE, API de localidades: https://servicodados.ibge.gov.br/api/v1/localidades/municipios"
-extraido_em = ""
-versao = ""
+extraido_em = "2026-11-20"
+versao = "2026-11-20"
 atualizar = "uv run tabelas municipios [--arquivo municipios.json]"
 
 [municipios_historicos]

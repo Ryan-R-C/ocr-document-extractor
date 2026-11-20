@@ -625,3 +625,13 @@ paralelo (diagnóstico, confiança, recálculo da decisão, estimativa de custo)
      provisório. `versao_pipeline` diferente entre ajuste e holdout invalida o veredito.
      Baseline de outra partição sai das tabelas por dimensão (populações diferentes).
      Descartado: usar o veredito pontual da seção "Metas" (decisão 121).
+
+## 2026-11-20 · Tabelas das regras
+
+128. **Tabela do IBGE carregada:** a API de localidades voltou a responder neste ambiente;
+     `uv run tabelas municipios` gravou 5.571 municípios das 27 UFs
+     (`app/regras/tabelas/municipios.csv`, versão 2026-11-20). A naturalidade do RG passa
+     a ser verificada (município × UF); nome fora da tabela, inclusive nome histórico ainda
+     não cadastrado em `municipios_historicos`, continua `NAO_VERIFICAVEL` com
+     `FORA_DA_TABELA`. Campo informativo: não muda a decisão. A CBO continua ausente: a
+     página de download do MTE exige captcha, que não foi contornado.
