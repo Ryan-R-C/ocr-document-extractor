@@ -55,7 +55,22 @@ uv run gabarito apagar-campos --manifesto <dir>/manifesto.jsonl --saida saidas/v
 uv run avaliar --config <rodada.toml> --particao ajuste
 uv run avaliar --config <rodada.toml> --particao ajuste --estimar [--base <relatorio.json>]
                [--taxa-releitura 0.6] [--orcamento-brl 50] [--gabarito <manifesto.jsonl>]
+uv run portao --ajuste <ajuste>/relatorio.json [--holdout <holdout>/relatorio.json]
+              [--baseline <fase1>/relatorio.json ...] --saida <rascunho.md>
 ```
+
+### Rascunho do relatório do Portão 2+3
+
+`uv run portao` (`avaliacao/portao.py`) só lê os `relatorio.json` (não roda a esteira nem
+recalcula métricas) e escreve o rascunho de `docs/relatorios/portao-2-3.md`: rodadas e
+`versao_pipeline` (com aviso em destaque se ajuste e holdout divergirem), veredito
+estatístico (decisões 119 a 121; provisório, sobre o ajuste, enquanto não houver holdout),
+erro escapado e alucinação por campo, subtipo, UF e qualidade contra o modo medição da
+rodada e dos baselines da mesma partição, comparação lado a lado com os baselines da Fase 1
+(sem segundo leitor), revisão, 422 por motivo, ancoragem e releitura, custo e latência,
+casos do diagnóstico com a coluna "Proposta de correção" e o efeito das opções de
+`NAO_VERIFICAVEL` e `AUSENTE`. Análise, próximos passos e as propostas ficam marcados
+`_a escrever_`. Um `relatorio.json` antigo sem alguma chave tem a seção omitida, com aviso.
 
 ### Estimativa de custo e orçamento
 

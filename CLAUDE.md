@@ -107,6 +107,7 @@ Atualize esta seção à medida que os comandos existirem.
 - `make openapi`: regenera `docs/openapi.json`; o teste de contrato falha se ele divergir
 - `make avaliar CONFIG=<arquivo> PARTICAO=ajuste MODO=padrao|flex|batch`: o padrão roda o gabarito sintético com os fakes; rodadas OpenAI em `avaliacao/configs/openai-*.toml`
 - `make comparar RELATORIOS="<a>/relatorio.json <b>/relatorio.json"`: rodadas lado a lado (desenho, modelo, esforço)
+- `uv run portao --ajuste <relatorio.json> [--holdout <relatorio.json>] [--baseline <relatorio.json> ...] --saida <arquivo.md>`: rascunho do relatório do Portão 2+3 a partir das rodadas (só lê os JSON)
 - `uv run gabarito {sintetico,importar-csv,particionar,validar,estratificar,apagar-campos}`: ver `docs/gabarito.md`
 - `uv run limpeza [--loop]`: job de limpeza do TTL
 - `uv run medir-ocr --imagens <dir> [--limite N]`: tempo e memória do PaddleOCR por imagem (rodar no container)

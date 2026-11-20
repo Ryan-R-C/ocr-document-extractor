@@ -28,6 +28,7 @@ dependencies = [
 avaliar = "avaliacao.cli:main_avaliar"
 gabarito = "avaliacao.cli:main_gabarito"
 comparar = "avaliacao.cli:main_comparar"
+portao = "avaliacao.portao:main"
 limpeza = "app.armazenamento.limpeza:main"
 medir-ocr = "avaliacao.medir_ocr:main"
 revisao = "avaliacao.revisao:main"
