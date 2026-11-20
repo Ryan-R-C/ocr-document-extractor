@@ -302,6 +302,7 @@ def markdown(relatorio: dict[str, Any]) -> str:
         ]
     linhas += _diagnostico(m.get("diagnostico"))
     linhas += relatorio_confianca.secoes(m)
+    linhas += _opcoes_decisao(m.get("opcoes_decisao"))
     return "\n".join(linhas) + "\n"
 
 
@@ -336,4 +337,67 @@ def _diagnostico(diag: dict[str, Any] | None) -> list[str]:
         f"{', '.join(c['regras']) or '—'} | {c['sugestao']} |"
         for c in diag["casos"]
     ]
+    return linhas
+
+
+def _rotulo_opcao(o: dict[str, Any]) -> str:
+    nv = "aprova" if o["aprovar_nao_verificavel"] else "bloqueia"
+    ausente = "422" if o["critico_ausente"] == "422" else "revisão"
+    return f"NAO_VERIFICAVEL {nv} · AUSENTE {ausente}" + (" (rodada)" if o["da_rodada"] else "")
+
+
+def _opcoes_decisao(od: dict[str, Any] | None) -> list[str]:
+    """Efeito das decisões em aberto, recalculado a partir desta rodada (redecisao.py)."""
+    if not od:
+        return []
+    linhas = [
+        "",
+        "## Efeito das opções de decisão",
+        "",
+        "Decisão recalculada em cada combinação de `APROVAR_CRITICO_NAO_VERIFICAVEL` e "
+        "`CRITICO_AUSENTE`, com as mesmas leituras desta rodada (sem novas chamadas). "
+        "422 por motivo conta documentos.",
+        "",
+    ]
+    if od["divergencias_com_a_rodada"]:
+        linhas += [
+            f"> **Atenção:** o recálculo da opção da rodada divergiu da esteira em "
+            f"{len(od['divergencias_com_a_rodada'])} documento(s): "
+            f"{', '.join(od['divergencias_com_a_rodada'])}.",
+            "",
+        ]
+    linhas += [
+        "| Opção | Docs | Aprovado | Revisão | 422 | 422 por motivo | Erro escapado | "
+        "Alucinações em críticos aprovados |",
+        "|---|---|---|---|---|---|---|---|",
+    ]
+    for o in od["opcoes"].values():
+        d = o["desfechos"]
+        linhas.append(
+            f"| {_rotulo_opcao(o)} | {o['documentos']} | "
+            f"{_pct(o['taxa_aprovacao'])} ({d.get('APROVADO', 0)}) | "
+            f"{_pct(o['taxa_revisao'])} ({d.get('REVISAO', 0)}) | "
+            f"{_pct(o['taxa_422'])} ({d.get('RECUSADO', 0)}) | {_contagem(o['422_por_motivo'])} | "
+            f"{_pct(o['taxa_erro_escapado'])} ({o['erros_escapados']}/{o['criticos_aprovados']}) | "
+            f"{o['alucinacoes_criticos_aprovados']} "
+            f"({o['alucinacoes_criticos_aprovados_incluindo_campo_apagado']} com campo apagado) |"
+        )
+    linhas += [
+        "",
+        "### Por subtipo",
+        "",
+        "| Subtipo | Opção | Docs | Aprovado | Revisão | 422 | Erro escapado |",
+        "|---|---|---|---|---|---|---|",
+    ]
+    subtipos = sorted({s for o in od["opcoes"].values() for s in o["por_subtipo"]})
+    for s in subtipos:
+        for o in od["opcoes"].values():
+            g = o["por_subtipo"].get(s)
+            if g is None:
+                continue
+            linhas.append(
+                f"| {s} | {_rotulo_opcao(o)} | {g['documentos']} | {_pct(g['taxa_aprovacao'])} | "
+                f"{_pct(g['taxa_revisao'])} | {_pct(g['taxa_422'])} | "
+                f"{_pct(g['taxa_erro_escapado'])} ({g['erros_escapados']}/{g['criticos_aprovados']}) |"
+            )
     return linhas

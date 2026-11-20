@@ -28,7 +28,7 @@ from collections import Counter, defaultdict
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from operator import attrgetter
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from app.api.contrato import StatusDocumento
 from app.core import decisao
@@ -37,6 +37,9 @@ from app.core.pipeline import ResultadoPipeline
 from app.schemas.campos import Escrita, definicao
 from avaliacao import confianca, diagnostico
 from avaliacao.gabarito import ItemGabarito
+
+if TYPE_CHECKING:
+    from avaliacao.redecisao import Recalculo
 
 META_ERRO_ESCAPADO = 0.005
 META_CUSTO_MEDIO_BRL = 0.15
@@ -181,6 +184,8 @@ class RegistroCampo:
 class Registros:
     documentos: list[RegistroDocumento] = field(default_factory=list)
     campos: list[RegistroCampo] = field(default_factory=list)
+    # Recálculo da decisão nas opções em aberto (avaliacao/redecisao.py).
+    opcoes_decisao: Recalculo | None = None
 
 
 def _desfecho(resultado: ResultadoPipeline) -> tuple[str, tuple[str, ...]]:
@@ -651,8 +656,15 @@ def calcular(
         "diagnostico": diagnostico.calcular(todos_campos),
         "confianca": confianca.calcular(registros, META_ERRO_ESCAPADO),
         "comparacao_medicao": confianca.comparacao_medicao(registros, META_ERRO_ESCAPADO),
+        "opcoes_decisao": _opcoes_decisao(registros),
     }
 
 
 def _meta(valor: float | None, criterio: Callable[[float], bool]) -> dict[str, Any]:
     return {"valor": valor, "atingida": None if valor is None else criterio(valor)}
+
+
+def _opcoes_decisao(registros: Registros) -> dict[str, Any] | None:
+    from avaliacao import redecisao  # importa este módulo: evita o ciclo na carga
+
+    return redecisao.calcular(registros.opcoes_decisao)
