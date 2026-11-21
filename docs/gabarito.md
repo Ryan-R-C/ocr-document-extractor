@@ -112,6 +112,9 @@ taxa_releitura = 0.6
 folga_tokens = 0.25
 ```
 
+Um exemplo completo, com dados fictícios, está em `docs/exemplos/gabarito/` (CSV de
+entrada, manifesto gerado e regras de preenchimento).
+
 O importador lê um CSV com as colunas `arquivo, tipo_documento, subtipo, uf, lado,
 qualidade[, particao]`, mais `campo:<nome>` (valor, `AUSENTE` ou `ILEGIVEL`) e, opcional,
 `caixa:<nome>` (`x,y,largura,altura`). Ele nunca altera os originais. Se o gabarito
