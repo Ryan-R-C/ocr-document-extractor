@@ -112,7 +112,7 @@ taxa_releitura = 0.6
 folga_tokens = 0.25
 ```
 
-Um exemplo completo, com dados fictícios, está em `docs/exemplos/gabarito/` (CSV de
+Um exemplo completo, com dados fictícios, está em `docs/exemplos/exemplo-gabarito/` (CSV de
 entrada, manifesto gerado e regras de preenchimento).
 
 O importador lê um CSV com as colunas `arquivo, tipo_documento, subtipo, uf, lado,

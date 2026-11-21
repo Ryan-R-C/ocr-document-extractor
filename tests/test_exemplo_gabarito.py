@@ -1,4 +1,4 @@
-"""O exemplo de gabarito em docs/exemplos/gabarito continua importável e igual ao manifesto."""
+"""O exemplo de gabarito em docs/exemplos/exemplo-gabarito continua importável e igual ao manifesto."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from avaliacao.gabarito import escrever_manifesto, ler_manifesto, verificar_arqu
 from avaliacao.importador import importar_csv
 from avaliacao.particao import atribuir_particoes
 
-EXEMPLO = Path(__file__).resolve().parents[1] / "docs" / "exemplos" / "gabarito"
+EXEMPLO = Path(__file__).resolve().parents[1] / "docs" / "exemplos" / "exemplo-gabarito"
 
 
 def test_exemplo_de_gabarito_importa_e_bate_com_o_manifesto(tmp_path: Path) -> None:
